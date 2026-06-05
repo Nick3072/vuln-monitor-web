@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "lib": ["ESNext"],
+    "types": ["@cloudflare/workers-types"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "hono/jsx"
+  },
+  // Worker 빌드 타입체크 대상은 src/ 만. 테스트(vitest/esbuild, node 타입 사용)는 제외.
+  "exclude": ["node_modules", "dist", "test", "src/**/*.test.ts"]
+}

@@ -1,0 +1,45 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "vuln-monitor-web",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-04-22",
+	"compatibility_flags": ["nodejs_compat"],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "vuln-monitor-db",
+			"database_id": "c7ef8a83-1bbd-4ddb-a811-fbfb262cb57b",
+			"remote": true
+		}
+	],
+	"ai": {
+		"binding": "AI"
+	},
+	"vectorize": [
+		{
+			"binding": "VECTORIZE",
+			"index_name": "vuln-monitor-solutions"
+		}
+	],
+	"vars": {
+		"ENVIRONMENT": "production"
+	}
+	// Secrets (set via `wrangler secret put <NAME>`):
+	//   API_KEY                   - bearer token for /api/* (n8n / external automation, '_system_automation' 매핑)
+	//   SESSION_SECRET            - HMAC 서명 키, 32+ 자 랜덤 문자열 (필수)
+	//                                node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+	//   ADMIN_PASSWORD            - v2.7 호환용 / v3.0 부트스트랩 후 더 이상 사용 안 됨 — 폐기 권장
+	//   N8N_REMATCH_WEBHOOK_URL   - e.g. https://n8n.example.com/webhook/vuln-rematch
+	//   N8N_BACKFILL_WEBHOOK_URL  - e.g. https://n8n.example.com/webhook/vuln-full-backfill
+	//   N8N_REMATCH_SECRET        - shared secret sent in x-rematch-secret header
+	//   NVD_API_KEY               - optional, raises NVD rate limit (5→50 req/30s)
+	//
+	// v3.0 부트스트랩 (마이그레이션 적용 후 1회만):
+	//   curl -X POST <worker>/admin/bootstrap \
+	//     -H "Authorization: Bearer $API_KEY" \
+	//     -H "Content-Type: application/json" \
+	//     -d '{"username":"admin","password":"<강한비번>","display_name":"System Admin","groups":["system"]}'
+	//
+	// Vectorize index (one-time setup):
+	//   wrangler vectorize create vuln-monitor-solutions --dimensions=768 --metric=cosine
+}

@@ -1,0 +1,730 @@
+<html lang="ko"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>솔루션 관리 — Vuln Monitor</title><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/css/tabler.min.css"/><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css"/><style>
+          body { font-feature-settings: &quot;cv11&quot;, &quot;ss01&quot;; }
+          .status-dot-animated { animation: pulse 2s ease-in-out infinite; }
+          @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+
+          /* =====================================================
+             VM DESIGN SYSTEM — solution-card layer
+             Extends Tabler CSS; uses --tblr-* where available.
+             All vm-* classes are scoped to this namespace.
+             ===================================================== */
+
+          /* ── Design tokens ─────────────────────────────────── */
+          :root {
+            --vm-radius: .5rem;
+            --vm-gap: 1rem;
+
+            /* vuln = 자동취약 — Tabler red */
+            --vm-vuln-fg:     #c92a2a;
+            --vm-vuln-bg:     #fff5f5;
+            --vm-vuln-border: #f1b8b8;
+            --vm-vuln-tint:   rgba(201, 42, 42, .045);
+
+            /* manual = 수동취약 — amber/orange (distinct hue from red) */
+            --vm-manual-fg:     #d9730d;
+            --vm-manual-bg:     #fff8ee;
+            --vm-manual-border: #f9cc8f;
+            --vm-manual-tint:   rgba(217, 115, 13, .05);
+
+            /* resolved = 조치완료 — teal */
+            --vm-resolved-fg:     #0b9268;
+            --vm-resolved-bg:     #e6f7f2;
+            --vm-resolved-border: #7ecfb6;
+            --vm-resolved-tint:   rgba(11, 146, 104, .04);
+
+            /* ok = 정상 — green */
+            --vm-ok-fg:     #2a9d3b;
+            --vm-ok-bg:     #eaf7ed;
+            --vm-ok-border: #92d49d;
+            --vm-ok-tint:   rgba(42, 157, 59, .04);
+
+            /* shared surface tokens */
+            --vm-text-muted:   #667085;
+            --vm-th-bg:        #f6f8fb;
+            --vm-row-hover-bg: rgba(20, 40, 90, .035);
+            --vm-card-shadow:  0 6px 24px -8px rgba(20, 30, 60, .18);
+          }
+
+          /* ── Status pills ───────────────────────────────────── */
+          /*   .vm-pill wraps a .vm-dot + label text              */
+          .vm-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: .35rem;
+            white-space: nowrap;
+            padding: .18rem .55rem;
+            border-radius: 999px;
+            font-size: .8125rem;
+            font-weight: 600;
+            line-height: 1.25;
+            border: 1px solid transparent;
+          }
+          .vm-pill .vm-dot {
+            width: .5rem;
+            height: .5rem;
+            border-radius: 50%;
+            background: currentColor;
+            flex: 0 0 auto;
+          }
+          /* CVE id label inside a vuln pill — truncate long ids within the fixed status column */
+          .vm-pill__cve {
+            display: inline-block;
+            max-width: 8.5rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            vertical-align: bottom;
+          }
+
+          /* vuln — red */
+          .vm-pill--vuln {
+            color:            var(--vm-vuln-fg);
+            background-color: var(--vm-vuln-bg);
+            border-color:     var(--vm-vuln-border);
+          }
+          /* manual — amber/orange (clearly different hue from vuln) */
+          .vm-pill--manual {
+            color:            var(--vm-manual-fg);
+            background-color: var(--vm-manual-bg);
+            border-color:     var(--vm-manual-border);
+          }
+          /* resolved — teal */
+          .vm-pill--resolved {
+            color:            var(--vm-resolved-fg);
+            background-color: var(--vm-resolved-bg);
+            border-color:     var(--vm-resolved-border);
+          }
+          /* ok — green */
+          .vm-pill--ok {
+            color:            var(--vm-ok-fg);
+            background-color: var(--vm-ok-bg);
+            border-color:     var(--vm-ok-border);
+          }
+
+          /* ── Supplementary note line below a cell value ─────── */
+          .vm-note {
+            display: block;
+            font-size: .72rem;
+            color: var(--vm-text-muted);
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            margin-top: .15rem;
+          }
+
+          /* ── Parent asset card ──────────────────────────────── */
+          .vm-card {
+            border-radius: var(--vm-radius);
+            overflow: hidden;
+            transition: box-shadow .18s ease, transform .18s ease;
+            /* left accent border — color set by modifier */
+            border-left: 3px solid transparent;
+          }
+          .vm-card:hover {
+            box-shadow: var(--vm-card-shadow);
+          }
+          /* accent colour on cards that have at least one vuln component */
+          .vm-card.is-vuln {
+            border-left-color: var(--vm-vuln-fg);
+          }
+          .vm-card.is-manual {
+            border-left-color: var(--vm-manual-fg);
+          }
+          .vm-card.is-resolved {
+            border-left-color: var(--vm-resolved-fg);
+          }
+
+          /* card header layout: asset name + rollup pills + actions */
+          .vm-card__head {
+            display: flex;
+            align-items: flex-start;
+            gap: .75rem;
+            flex-wrap: wrap;
+          }
+
+          /* ── Header rollup pill (slightly larger than inline pill) */
+          .vm-rollup {
+            display: inline-flex;
+            align-items: center;
+            gap: .4rem;
+            white-space: nowrap;
+            padding: .25rem .65rem;
+            border-radius: 999px;
+            font-size: .875rem;
+            font-weight: 700;
+            line-height: 1.2;
+            border: 1px solid transparent;
+          }
+          .vm-rollup .vm-dot {
+            width: .55rem;
+            height: .55rem;
+            border-radius: 50%;
+            background: currentColor;
+            flex: 0 0 auto;
+          }
+          /* rollup uses same semantic colour modifiers as .vm-pill */
+          .vm-rollup--vuln     { color: var(--vm-vuln-fg);     background-color: var(--vm-vuln-bg);     border-color: var(--vm-vuln-border); }
+          .vm-rollup--manual   { color: var(--vm-manual-fg);   background-color: var(--vm-manual-bg);   border-color: var(--vm-manual-border); }
+          .vm-rollup--resolved { color: var(--vm-resolved-fg); background-color: var(--vm-resolved-bg); border-color: var(--vm-resolved-border); }
+          .vm-rollup--ok       { color: var(--vm-ok-fg);       background-color: var(--vm-ok-bg);       border-color: var(--vm-ok-border); }
+
+          /* ── Component table ────────────────────────────────── */
+          /*   fixed layout so columns align across ALL cards      */
+          .vm-table {
+            table-layout: fixed;
+            width: 100%;
+            border-collapse: collapse;
+          }
+          .vm-table thead th {
+            font-size: .7rem;
+            text-transform: uppercase;
+            letter-spacing: .03em;
+            color: var(--vm-text-muted);
+            font-weight: 600;
+            background: var(--vm-th-bg);
+            padding: .45rem .6rem;
+            border-bottom: 1px solid var(--tblr-border-color, #e6e7e9);
+          }
+          .vm-table td,
+          .vm-table th {
+            vertical-align: middle;
+            padding: .45rem .6rem;
+          }
+          .vm-table tbody tr {
+            transition: background-color .12s ease;
+            border-bottom: 1px solid var(--tblr-border-color, #e6e7e9);
+          }
+          .vm-table tbody tr:last-child {
+            border-bottom: none;
+          }
+          .vm-table tbody tr:hover {
+            background: var(--vm-row-hover-bg);
+          }
+
+          /* vendor·product cell — truncate long strings */
+          .vm-cell-vp {
+            display: block;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          /* category badge — clamp to its (fixed-width) cell so a long Korean
+             label can never spill into the neighbouring column (no overlap). */
+          .vm-cat {
+            display: inline-block;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            vertical-align: middle;
+          }
+
+          /* status cell wrapper — keep pill + note within the column width */
+          .vm-status {
+            max-width: 100%;
+            overflow: hidden;
+          }
+          .vm-status .vm-pill {
+            max-width: 100%;
+          }
+
+          /* version chip — monospace, subtle background */
+          .vm-ver,
+          code.vm-ver {
+            font-family: ui-monospace, &quot;SFMono-Regular&quot;, &quot;Consolas&quot;, monospace;
+            font-size: .78rem;
+            background: var(--tblr-bg-surface-secondary, #f0f2f5);
+            border: 1px solid var(--tblr-border-color, #e6e7e9);
+            border-radius: .25rem;
+            padding: .05rem .35rem;
+            color: inherit;
+          }
+
+          /* ── Row status tints ───────────────────────────────── */
+          .vm-row--vuln {
+            background-color: var(--vm-vuln-tint);
+          }
+          .vm-row--vuln:hover {
+            background-color: rgba(201, 42, 42, .08);
+          }
+          .vm-row--manual {
+            background-color: var(--vm-manual-tint);
+          }
+          .vm-row--manual:hover {
+            background-color: rgba(217, 115, 13, .09);
+          }
+          .vm-row--resolved {
+            background-color: var(--vm-resolved-tint);
+          }
+          .vm-row--resolved:hover {
+            background-color: rgba(11, 146, 104, .07);
+          }
+
+          /* ── Korean text — break at word boundaries, never char-by-char ──
+             한글은 기본 글자 단위 줄바꿈이라 좁은 폭에서 세로로 깨진다.
+             전역 word-break:keep-all → 모든 한글 텍스트를 단어(공백) 단위로만 줄바꿈해
+             세로 글자 깨짐을 근절한다. (truncate 가 필요한 .vm-cat/.vm-cell-vp 는
+             white-space:nowrap+ellipsis 를 따로 쓰므로 영향 없음.)
+             ※ overflow-wrap:anywhere 는 flex 최소폭을 1글자로 만들어 오히려 깨짐을 유발 → 금지. */
+          body {
+            word-break: keep-all;
+          }
+
+          /* ── Responsive tweaks ──────────────────────────────── */
+          @media (max-width: 767.98px) {
+            .vm-card__head {
+              gap: .5rem;
+            }
+            /* table already wrapped by Tabler .table-responsive;
+               ensure pills don&#39;t overflow on narrow screens */
+            .vm-rollup {
+              font-size: .8rem;
+              padding: .2rem .5rem;
+            }
+          }
+
+          /* 좁은 화면: 페이지 헤더 툴바(뷰토글/등록 버튼)를 제목 아래 줄로 내려
+             제목이 짓눌려 세로로 깨지는 현상 방지. */
+          @media (max-width: 700px) {
+            .page-header .row.align-items-center &gt; .col-auto.ms-auto {
+              flex: 0 0 100%;
+              max-width: 100%;
+              margin-left: 0 !important;
+              margin-top: .5rem;
+            }
+            .page-header .btn-list {
+              flex-wrap: wrap;
+            }
+          }
+
+          /* ── Reduced-motion ─────────────────────────────────── */
+          @media (prefers-reduced-motion: reduce) {
+            .vm-card,
+            .vm-table tbody tr {
+              transition: none;
+            }
+          }
+        </style></head><body><div class="page"><header class="navbar navbar-expand-md d-print-none"><div class="container-xl"><h1 class="navbar-brand navbar-brand-autodark d-none-navbar-horizontal pe-0 pe-md-3"><a href="/" class="d-flex align-items-center text-decoration-none"><i class="ti ti-shield-check text-primary me-2" style="font-size:1.5rem"></i><span class="fw-bold">Vuln Monitor</span></a></h1><div class="navbar-nav flex-row order-md-last align-items-center"><div class="nav-item me-3"><span class="badge bg-green-lt">production</span></div><div class="nav-item d-flex align-items-center"><div class="me-2 text-end d-none d-md-block"><div class="small fw-bold">admin</div><div class="text-muted" style="font-size: .75rem"><span class="badge bg-red-lt me-1">admin</span>공용</div></div><form method="post" action="/logout" class="d-inline"><button type="submit" class="btn btn-sm btn-outline-secondary d-inline-flex align-items-center" title="세션 로그아웃"><i class="ti ti-logout me-1"></i>로그아웃</button></form></div></div><div class="collapse navbar-collapse"><ul class="navbar-nav"><li class="nav-item "><a class="nav-link" href="/"><span class="nav-link-icon"><i class="ti ti-dashboard"></i></span><span class="nav-link-title">대시보드</span></a></li><li class="nav-item active"><a class="nav-link" href="/solutions"><span class="nav-link-icon"><i class="ti ti-server-2"></i></span><span class="nav-link-title">솔루션 관리</span></a></li><li class="nav-item "><a class="nav-link" href="/admin/users"><span class="nav-link-icon"><i class="ti ti-users"></i></span><span class="nav-link-title">사용자 관리</span></a></li></ul></div></div></header><div class="page-wrapper"><div class="page-header d-print-none"><div class="container-xl"><div class="row g-2 align-items-center"><div class="col"><h2 class="page-title">솔루션 관리 </h2><div class="text-muted">등록된 보안솔루션 자산 2건</div></div><div class="col-auto ms-auto d-print-none"><div class="btn-list"><div class="btn-group" role="group" aria-label="뷰 전환"><a href="/solutions" class="btn btn-sm btn-primary" title="부모 솔루션(자산) 카드 단위 보기 — 기본"><i class="ti ti-layout-cards me-1"></i>솔루션별(기본)</a><a href="/solutions?view=list" class="btn btn-sm btn-outline-secondary" title="개별 구성요소 행 단위 보기 — 평면"><i class="ti ti-list me-1"></i>개별(평면)</a></div><button type="button" class="btn btn-outline-primary d-inline-flex align-items-center" data-bs-toggle="modal" data-bs-target="#bulk-modal"><i class="ti ti-file-upload me-1"></i>CSV 일괄 등록</button><button type="button" class="btn btn-success d-inline-flex align-items-center" data-bs-toggle="modal" data-bs-target="#asset-modal" title="장비(서버/방화벽) 1대를 등록합니다. OS 버전 필수, 나머지(HW/DB/OpenSSL/WEB/WAS)는 선택"><i class="ti ti-server-2 me-1"></i>장비 등록</button></div></div></div></div></div><div class="page-body"><div class="container-xl"><div class="alert alert-warning d-flex align-items-center mb-3"><i class="ti ti-alert-triangle me-2 flex-shrink-0"></i><div class="flex-grow-1">아직 솔루션으로 묶이지 않은 구성요소 <strong>2건</strong>이 있습니다.</div><form method="post" action="/solutions/assets/backfill" class="ms-3 flex-shrink-0"><button type="submit" class="btn btn-sm btn-warning"><i class="ti ti-link me-1"></i>지금 묶기</button></form></div><div class="card mb-3"><div class="card-body py-2 d-flex flex-wrap gap-2 align-items-center"><span class="text-muted me-2"><i class="ti ti-building me-1"></i>그룹사</span><a href="/solutions" class="btn btn-sm btn-primary">전체</a><a href="/solutions?group=%EA%B3%B5%EC%9A%A9" class="btn btn-sm btn-outline-secondary">공용<span class="badge bg-secondary text-white ms-2">6</span><span class="badge bg-red text-white ms-1">3</span></a></div></div><div class="row row-cards g-3"><div class="col-12"><div class="card vm-card is-vuln"><div class="card-header py-2 vm-card__head"><div class="d-flex align-items-start flex-wrap gap-2 flex-grow-1"><div class="me-2 flex-shrink-0"><span class="vm-rollup vm-pill vm-pill--vuln" title="취약 컴포넌트 4건"><span class="vm-dot"></span><i class="ti ti-shield-exclamation me-1"></i>취약 4</span></div><div class="flex-grow-1 min-width-0"><h3 class="card-title mb-1"><i class="ti ti-server-2 me-2 text-azure"></i><strong>SNIPER ONE-i 5300</strong></h3><div class="d-flex flex-wrap gap-2 align-items-center small text-muted"><span class="badge bg-purple-lt"><i class="ti ti-building me-1"></i>공용</span><span><i class="ti ti-server-2 me-1"></i>PJ-FI-IDS</span><span><i class="ti ti-user me-1"></i>네트웍보안기술팀</span><span class="badge bg-secondary-lt">컴포넌트 6</span><span>Wins</span></div></div></div><div class="card-actions d-flex flex-wrap gap-1 flex-shrink-0"><button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#asset-modal" data-prefill-hostname="PJ-FI-IDS" data-prefill-group="공용" title="이 자산에 구성요소 추가"><i class="ti ti-plus me-1"></i>구성요소 추가</button><button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#asset-edit-modal" data-asset-id="1" data-name="SNIPER ONE-i 5300" data-vendor="Wins" data-hostname="PJ-FI-IDS" data-group-company="공용" data-owner="네트웍보안기술팀" data-notes="" title="자산 정보 수정"><i class="ti ti-edit me-1"></i>수정</button><form method="post" action="/solutions/asset/1/delete" class="d-inline" onsubmit="return confirm(&#39;자산 &quot;SNIPER ONE-i 5300&quot;과 소속 구성요소 6건을 모두 삭제하시겠습니까?&#39;);"><button type="submit" class="btn btn-sm btn-outline-danger" title="자산 및 구성요소 일괄 삭제"><i class="ti ti-trash me-1"></i>삭제</button></form></div></div><div class="table-responsive"><table class="table table-sm table-vcenter mb-0 vm-table"><colgroup><col style="width:2.5rem"/><col style="width:9rem"/><col style="width:13rem"/><col/><col style="width:8rem"/><col style="width:4rem"/><col style="width:8rem"/></colgroup><thead><tr><th></th><th>상태</th><th>카테고리</th><th>벤더 · 제품</th><th>버전</th><th>CVE</th><th></th></tr></thead><tbody><tr class="bg-red-lt"><td><button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-toggle-cves="11" aria-expanded="false" aria-label="속성/CVE 펼치기"><i class="ti ti-chevron-down"></i></button></td><td><div class="vm-status"><span class="vm-pill vm-pill--manual" title="KISA 권고 수동 확인"><i class="ti ti-flag"></i>수동취약</span><span class="vm-note" title="KISA 권고 수동 확인">KISA 권고 수동 확인</span></div></td><td><span class="badge bg-blue-lt vm-cat" title="Crypto (암호 라이브러리)">Crypto (암호 라이브러리)</span></td><td><span class="vm-cell-vp" title="OpenSSL OpenSSL"><strong>OpenSSL</strong> OpenSSL</span></td><td><code>3.3.5</code></td><td><span class="badge bg-red text-white">1</span></td><td class="text-end"><div class="btn-list flex-nowrap"><button type="button" class="btn btn-sm btn-icon" data-bs-toggle="modal" data-bs-target="#solution-modal" data-mode="edit" data-id="11" data-vendor="OpenSSL" data-product="OpenSSL" data-category="Crypto" data-current-version="3.3.5" data-hostname="PJ-FI-IDS" data-owner="네트웍보안기술팀" data-notes="" data-group-company="공용" data-cpe-part="" data-cpe-version-range="" data-aliases="" data-cpe-uri="" data-category-attributes="" data-asset-id="1" aria-label="수정"><i class="ti ti-edit"></i></button><form method="post" action="/solutions/11/delete" class="d-inline" onsubmit="return confirm(&#39;OpenSSL OpenSSL 를 삭제하시겠습니까?&#39;);"><button type="submit" class="btn btn-sm btn-icon text-danger" aria-label="삭제"><i class="ti ti-trash"></i></button></form><div class="dropdown d-inline"><button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-bs-toggle="dropdown" aria-expanded="false" aria-label="취약점 상태 관리" title="취약점 상태 관리"><i class="ti ti-shield-bolt"></i></button><div class="dropdown-menu dropdown-menu-end"><div class="dropdown-header small text-muted py-1">상태 관리</div><button type="button" class="dropdown-item text-danger" data-bs-toggle="modal" data-bs-target="#vuln-mark-modal" data-id="11" data-vendor="OpenSSL" data-product="OpenSSL"><i class="ti ti-flag me-2"></i>수동 취약 표시</button><form method="post" action="/solutions/11/vuln-status" class="d-block" onsubmit="return confirm(&#39;OpenSSL OpenSSL 를 조치완료(해결)로 표시하시겠습니까?&#39;);"><input type="hidden" name="action" value="resolved"/><button type="submit" class="dropdown-item text-teal"><i class="ti ti-circle-check me-2"></i>조치완료(해결)</button></form><form method="post" action="/solutions/11/vuln-status" class="d-block" onsubmit="return confirm(&#39;OpenSSL OpenSSL 의 수동 상태를 해제하고 자동(n8n) 상태로 복귀하시겠습니까?&#39;);"><input type="hidden" name="action" value="auto"/><button type="submit" class="dropdown-item text-secondary"><i class="ti ti-refresh me-2"></i>자동복귀(n8n)</button></form></div></div></div></td></tr><tr id="solcves-11" class="d-none"><td colspan="7" class="bg-red-lt"><div class="p-2"><div class="card"><div class="card-body p-2"><div class="small text-muted mb-2">감지된 CVE 1건 (최근순)</div><div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>CVE</th><th>심각도</th><th>출처</th><th>공개</th><th>감지</th><th>제목</th></tr></thead><tbody><tr><td><a href="https://nvd.nist.gov/vuln/detail/CVE-2024-6119" target="_blank" rel="noopener noreferrer">CVE-2024-6119</a></td><td><span class="badge bg-orange text-white">high</span></td><td><span class="badge bg-secondary-lt">NVD</span></td><td class="text-muted small">2026-05-20</td><td class="text-muted small">2026-05-21 03:00:00</td><td class="text-truncate" style="max-width:28rem">CVE-2024-6119 설명</td></tr></tbody></table></div></div></div></div></td></tr><tr class="bg-teal-lt"><td><span class="text-muted">—</span></td><td><div class="vm-status"><span class="vm-pill vm-pill--resolved" title="패치 적용 완료(10.2p)"><i class="ti ti-circle-check"></i>조치완료</span><span class="vm-note" title="패치 적용 완료(10.2p)">패치 적용 완료(10.2p)</span></div></td><td><span class="badge bg-blue-lt vm-cat" title="기타">기타</span></td><td><span class="vm-cell-vp" title="OpenSSH OpenSSH"><strong>OpenSSH</strong> OpenSSH</span></td><td><code>10.2p</code></td><td><span class="text-muted">—</span></td><td class="text-end"><div class="btn-list flex-nowrap"><button type="button" class="btn btn-sm btn-icon" data-bs-toggle="modal" data-bs-target="#solution-modal" data-mode="edit" data-id="12" data-vendor="OpenSSH" data-product="OpenSSH" data-category="Other" data-current-version="10.2p" data-hostname="PJ-FI-IDS" data-owner="네트웍보안기술팀" data-notes="" data-group-company="공용" data-cpe-part="" data-cpe-version-range="" data-aliases="" data-cpe-uri="" data-category-attributes="" data-asset-id="1" aria-label="수정"><i class="ti ti-edit"></i></button><form method="post" action="/solutions/12/delete" class="d-inline" onsubmit="return confirm(&#39;OpenSSH OpenSSH 를 삭제하시겠습니까?&#39;);"><button type="submit" class="btn btn-sm btn-icon text-danger" aria-label="삭제"><i class="ti ti-trash"></i></button></form><div class="dropdown d-inline"><button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-bs-toggle="dropdown" aria-expanded="false" aria-label="취약점 상태 관리" title="취약점 상태 관리"><i class="ti ti-shield-bolt"></i></button><div class="dropdown-menu dropdown-menu-end"><div class="dropdown-header small text-muted py-1">상태 관리</div><button type="button" class="dropdown-item text-danger" data-bs-toggle="modal" data-bs-target="#vuln-mark-modal" data-id="12" data-vendor="OpenSSH" data-product="OpenSSH"><i class="ti ti-flag me-2"></i>수동 취약 표시</button><form method="post" action="/solutions/12/vuln-status" class="d-block" onsubmit="return confirm(&#39;OpenSSH OpenSSH 를 조치완료(해결)로 표시하시겠습니까?&#39;);"><input type="hidden" name="action" value="resolved"/><button type="submit" class="dropdown-item text-teal"><i class="ti ti-circle-check me-2"></i>조치완료(해결)</button></form><form method="post" action="/solutions/12/vuln-status" class="d-block" onsubmit="return confirm(&#39;OpenSSH OpenSSH 의 수동 상태를 해제하고 자동(n8n) 상태로 복귀하시겠습니까?&#39;);"><input type="hidden" name="action" value="auto"/><button type="submit" class="dropdown-item text-secondary"><i class="ti ti-refresh me-2"></i>자동복귀(n8n)</button></form></div></div></div></td></tr><tr class="bg-red-lt"><td><button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-toggle-cves="13" aria-expanded="false" aria-label="속성/CVE 펼치기"><i class="ti ti-chevron-down"></i></button></td><td><div class="vm-status"><span class="vm-pill vm-pill--vuln" title="CVE-2023-7104"><i class="ti ti-alert-triangle"></i>취약</span><span class="vm-note" title="CVE-2023-7104">CVE-2023-7104 · 총 2건</span></div></td><td><span class="badge bg-blue-lt vm-cat" title="DB (데이터베이스)">DB (데이터베이스)</span></td><td><span class="vm-cell-vp" title="SQLite SQLite"><strong>SQLite</strong> SQLite</span></td><td><code>3.7.17</code></td><td><span class="badge bg-red text-white">2</span></td><td class="text-end"><div class="btn-list flex-nowrap"><button type="button" class="btn btn-sm btn-icon" data-bs-toggle="modal" data-bs-target="#solution-modal" data-mode="edit" data-id="13" data-vendor="SQLite" data-product="SQLite" data-category="DB" data-current-version="3.7.17" data-hostname="PJ-FI-IDS" data-owner="네트웍보안기술팀" data-notes="" data-group-company="공용" data-cpe-part="" data-cpe-version-range="" data-aliases="" data-cpe-uri="" data-category-attributes="" data-asset-id="1" aria-label="수정"><i class="ti ti-edit"></i></button><form method="post" action="/solutions/13/delete" class="d-inline" onsubmit="return confirm(&#39;SQLite SQLite 를 삭제하시겠습니까?&#39;);"><button type="submit" class="btn btn-sm btn-icon text-danger" aria-label="삭제"><i class="ti ti-trash"></i></button></form><div class="dropdown d-inline"><button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-bs-toggle="dropdown" aria-expanded="false" aria-label="취약점 상태 관리" title="취약점 상태 관리"><i class="ti ti-shield-bolt"></i></button><div class="dropdown-menu dropdown-menu-end"><div class="dropdown-header small text-muted py-1">상태 관리</div><button type="button" class="dropdown-item text-danger" data-bs-toggle="modal" data-bs-target="#vuln-mark-modal" data-id="13" data-vendor="SQLite" data-product="SQLite"><i class="ti ti-flag me-2"></i>수동 취약 표시</button><form method="post" action="/solutions/13/vuln-status" class="d-block" onsubmit="return confirm(&#39;SQLite SQLite 를 조치완료(해결)로 표시하시겠습니까?&#39;);"><input type="hidden" name="action" value="resolved"/><button type="submit" class="dropdown-item text-teal"><i class="ti ti-circle-check me-2"></i>조치완료(해결)</button></form></div></div></div></td></tr><tr id="solcves-13" class="d-none"><td colspan="7" class="bg-red-lt"><div class="p-2"><div class="card"><div class="card-body p-2"><div class="small text-muted mb-2">감지된 CVE 2건 (최근순)</div><div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>CVE</th><th>심각도</th><th>출처</th><th>공개</th><th>감지</th><th>제목</th></tr></thead><tbody><tr><td><a href="https://nvd.nist.gov/vuln/detail/CVE-2023-7104" target="_blank" rel="noopener noreferrer">CVE-2023-7104</a></td><td><span class="badge bg-yellow">medium</span></td><td><span class="badge bg-secondary-lt">NVD</span></td><td class="text-muted small">2026-05-20</td><td class="text-muted small">2026-05-21 03:00:00</td><td class="text-truncate" style="max-width:28rem">CVE-2023-7104 설명</td></tr><tr><td><a href="https://nvd.nist.gov/vuln/detail/CVE-2023-0001" target="_blank" rel="noopener noreferrer">CVE-2023-0001</a></td><td><span class="badge bg-azure-lt">low</span></td><td><span class="badge bg-secondary-lt">NVD</span></td><td class="text-muted small">2026-05-20</td><td class="text-muted small">2026-05-21 03:00:00</td><td class="text-truncate" style="max-width:28rem">CVE-2023-0001 설명</td></tr></tbody></table></div></div></div></div></td></tr><tr class=""><td><span class="text-muted">—</span></td><td><span class="vm-pill vm-pill--ok"><i class="ti ti-shield-check"></i>정상</span></td><td><span class="badge bg-blue-lt vm-cat" title="HW (장비/펌웨어)">HW (장비/펌웨어)</span></td><td><span class="vm-cell-vp" title="Wins SNIPER ONE-i 5300"><strong>Wins</strong> SNIPER ONE-i 5300</span></td><td><code>v3.3.1.15</code></td><td><span class="text-muted">—</span></td><td class="text-end"><div class="btn-list flex-nowrap"><button type="button" class="btn btn-sm btn-icon" data-bs-toggle="modal" data-bs-target="#solution-modal" data-mode="edit" data-id="14" data-vendor="Wins" data-product="SNIPER ONE-i 5300" data-category="HW" data-current-version="v3.3.1.15" data-hostname="PJ-FI-IDS" data-owner="네트웍보안기술팀" data-notes="" data-group-company="공용" data-cpe-part="" data-cpe-version-range="" data-aliases="" data-cpe-uri="" data-category-attributes="" data-asset-id="1" aria-label="수정"><i class="ti ti-edit"></i></button><form method="post" action="/solutions/14/delete" class="d-inline" onsubmit="return confirm(&#39;Wins SNIPER ONE-i 5300 를 삭제하시겠습니까?&#39;);"><button type="submit" class="btn btn-sm btn-icon text-danger" aria-label="삭제"><i class="ti ti-trash"></i></button></form><div class="dropdown d-inline"><button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-bs-toggle="dropdown" aria-expanded="false" aria-label="취약점 상태 관리" title="취약점 상태 관리"><i class="ti ti-shield-bolt"></i></button><div class="dropdown-menu dropdown-menu-end"><div class="dropdown-header small text-muted py-1">상태 관리</div><button type="button" class="dropdown-item text-danger" data-bs-toggle="modal" data-bs-target="#vuln-mark-modal" data-id="14" data-vendor="Wins" data-product="SNIPER ONE-i 5300"><i class="ti ti-flag me-2"></i>수동 취약 표시</button></div></div></div></td></tr><tr class=""><td><span class="text-muted">—</span></td><td><span class="vm-pill vm-pill--ok"><i class="ti ti-shield-check"></i>정상</span></td><td><span class="badge bg-blue-lt vm-cat" title="OS (운영체제)">OS (운영체제)</span></td><td><span class="vm-cell-vp" title="Wins SNIPER ONE-i 5300"><strong>Wins</strong> SNIPER ONE-i 5300</span></td><td><code>v4.0.8_k5.4.0</code></td><td><span class="text-muted">—</span></td><td class="text-end"><div class="btn-list flex-nowrap"><button type="button" class="btn btn-sm btn-icon" data-bs-toggle="modal" data-bs-target="#solution-modal" data-mode="edit" data-id="15" data-vendor="Wins" data-product="SNIPER ONE-i 5300" data-category="OS" data-current-version="v4.0.8_k5.4.0" data-hostname="PJ-FI-IDS" data-owner="네트웍보안기술팀" data-notes="" data-group-company="공용" data-cpe-part="" data-cpe-version-range="" data-aliases="" data-cpe-uri="" data-category-attributes="" data-asset-id="1" aria-label="수정"><i class="ti ti-edit"></i></button><form method="post" action="/solutions/15/delete" class="d-inline" onsubmit="return confirm(&#39;Wins SNIPER ONE-i 5300 를 삭제하시겠습니까?&#39;);"><button type="submit" class="btn btn-sm btn-icon text-danger" aria-label="삭제"><i class="ti ti-trash"></i></button></form><div class="dropdown d-inline"><button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-bs-toggle="dropdown" aria-expanded="false" aria-label="취약점 상태 관리" title="취약점 상태 관리"><i class="ti ti-shield-bolt"></i></button><div class="dropdown-menu dropdown-menu-end"><div class="dropdown-header small text-muted py-1">상태 관리</div><button type="button" class="dropdown-item text-danger" data-bs-toggle="modal" data-bs-target="#vuln-mark-modal" data-id="15" data-vendor="Wins" data-product="SNIPER ONE-i 5300"><i class="ti ti-flag me-2"></i>수동 취약 표시</button></div></div></div></td></tr><tr class="bg-red-lt"><td><span class="text-muted">—</span></td><td><div class="vm-status"><span class="vm-pill vm-pill--vuln" title="CVE-2025-24813"><i class="ti ti-alert-triangle"></i>취약</span><span class="vm-note" title="CVE-2025-24813">CVE-2025-24813</span></div></td><td><span class="badge bg-blue-lt vm-cat" title="WAS (애플리케이션 서버)">WAS (애플리케이션 서버)</span></td><td><span class="vm-cell-vp" title="Apache Software Foundation Tomcat Application Server"><strong>Apache Software Foundation</strong> Tomcat Application Server</span></td><td><code>9.0.85</code></td><td><span class="text-muted">—</span></td><td class="text-end"><div class="btn-list flex-nowrap"><button type="button" class="btn btn-sm btn-icon" data-bs-toggle="modal" data-bs-target="#solution-modal" data-mode="edit" data-id="16" data-vendor="Apache Software Foundation" data-product="Tomcat Application Server" data-category="WAS" data-current-version="9.0.85" data-hostname="PJ-FI-IDS" data-owner="네트웍보안기술팀" data-notes="" data-group-company="공용" data-cpe-part="" data-cpe-version-range="" data-aliases="" data-cpe-uri="" data-category-attributes="" data-asset-id="1" aria-label="수정"><i class="ti ti-edit"></i></button><form method="post" action="/solutions/16/delete" class="d-inline" onsubmit="return confirm(&#39;Apache Software Foundation Tomcat Application Server 를 삭제하시겠습니까?&#39;);"><button type="submit" class="btn btn-sm btn-icon text-danger" aria-label="삭제"><i class="ti ti-trash"></i></button></form><div class="dropdown d-inline"><button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-bs-toggle="dropdown" aria-expanded="false" aria-label="취약점 상태 관리" title="취약점 상태 관리"><i class="ti ti-shield-bolt"></i></button><div class="dropdown-menu dropdown-menu-end"><div class="dropdown-header small text-muted py-1">상태 관리</div><button type="button" class="dropdown-item text-danger" data-bs-toggle="modal" data-bs-target="#vuln-mark-modal" data-id="16" data-vendor="Apache Software Foundation" data-product="Tomcat Application Server"><i class="ti ti-flag me-2"></i>수동 취약 표시</button><form method="post" action="/solutions/16/vuln-status" class="d-block" onsubmit="return confirm(&#39;Apache Software Foundation Tomcat Application Server 를 조치완료(해결)로 표시하시겠습니까?&#39;);"><input type="hidden" name="action" value="resolved"/><button type="submit" class="dropdown-item text-teal"><i class="ti ti-circle-check me-2"></i>조치완료(해결)</button></form></div></div></div></td></tr></tbody></table></div></div></div><div class="col-12"><div class="card vm-card is-vuln"><div class="card-header py-2 vm-card__head"><div class="d-flex align-items-start flex-wrap gap-2 flex-grow-1"><div class="me-2 flex-shrink-0"><span class="vm-rollup vm-pill vm-pill--vuln" title="취약 컴포넌트 1건"><span class="vm-dot"></span><i class="ti ti-shield-exclamation me-1"></i>취약 1</span></div><div class="flex-grow-1 min-width-0"><h3 class="card-title mb-1"><i class="ti ti-server-2 me-2 text-azure"></i><strong>FortiOS</strong></h3><div class="d-flex flex-wrap gap-2 align-items-center small text-muted"><span class="badge bg-purple-lt"><i class="ti ti-building me-1"></i>공용</span><span><i class="ti ti-server-2 me-1"></i>fw_hq_10</span><span><i class="ti ti-user me-1"></i>네트웍보안기술팀</span><span class="badge bg-secondary-lt">컴포넌트 1</span><span>Fortinet</span></div></div></div><div class="card-actions d-flex flex-wrap gap-1 flex-shrink-0"><button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#asset-modal" data-prefill-hostname="fw_hq_10" data-prefill-group="공용" title="이 자산에 구성요소 추가"><i class="ti ti-plus me-1"></i>구성요소 추가</button><button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#asset-edit-modal" data-asset-id="2" data-name="FortiOS" data-vendor="Fortinet" data-hostname="fw_hq_10" data-group-company="공용" data-owner="네트웍보안기술팀" data-notes="" title="자산 정보 수정"><i class="ti ti-edit me-1"></i>수정</button><form method="post" action="/solutions/asset/2/delete" class="d-inline" onsubmit="return confirm(&#39;자산 &quot;FortiOS&quot;과 소속 구성요소 1건을 모두 삭제하시겠습니까?&#39;);"><button type="submit" class="btn btn-sm btn-outline-danger" title="자산 및 구성요소 일괄 삭제"><i class="ti ti-trash me-1"></i>삭제</button></form></div></div><div class="table-responsive"><table class="table table-sm table-vcenter mb-0 vm-table"><colgroup><col style="width:2.5rem"/><col style="width:9rem"/><col style="width:13rem"/><col/><col style="width:8rem"/><col style="width:4rem"/><col style="width:8rem"/></colgroup><thead><tr><th></th><th>상태</th><th>카테고리</th><th>벤더 · 제품</th><th>버전</th><th>CVE</th><th></th></tr></thead><tbody><tr class="bg-red-lt"><td><button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-toggle-cves="21" aria-expanded="false" aria-label="속성/CVE 펼치기"><i class="ti ti-chevron-down"></i></button></td><td><div class="vm-status"><span class="vm-pill vm-pill--manual" title="수동 확인된 취약점"><i class="ti ti-flag"></i>수동취약</span><span class="vm-note" title="수동 확인된 취약점">수동 확인된 취약점</span></div></td><td><span class="badge bg-blue-lt vm-cat" title="FW (방화벽)">FW (방화벽)</span></td><td><span class="vm-cell-vp" title="Fortinet FortiOS"><strong>Fortinet</strong> FortiOS</span></td><td><code>7.4.1</code></td><td><span class="badge bg-red text-white">1</span></td><td class="text-end"><div class="btn-list flex-nowrap"><button type="button" class="btn btn-sm btn-icon" data-bs-toggle="modal" data-bs-target="#solution-modal" data-mode="edit" data-id="21" data-vendor="Fortinet" data-product="FortiOS" data-category="FW" data-current-version="7.4.1" data-hostname="fw_hq_10" data-owner="네트웍보안기술팀" data-notes="" data-group-company="공용" data-cpe-part="" data-cpe-version-range="" data-aliases="" data-cpe-uri="" data-category-attributes="" data-asset-id="1" aria-label="수정"><i class="ti ti-edit"></i></button><form method="post" action="/solutions/21/delete" class="d-inline" onsubmit="return confirm(&#39;Fortinet FortiOS 를 삭제하시겠습니까?&#39;);"><button type="submit" class="btn btn-sm btn-icon text-danger" aria-label="삭제"><i class="ti ti-trash"></i></button></form><div class="dropdown d-inline"><button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-bs-toggle="dropdown" aria-expanded="false" aria-label="취약점 상태 관리" title="취약점 상태 관리"><i class="ti ti-shield-bolt"></i></button><div class="dropdown-menu dropdown-menu-end"><div class="dropdown-header small text-muted py-1">상태 관리</div><button type="button" class="dropdown-item text-danger" data-bs-toggle="modal" data-bs-target="#vuln-mark-modal" data-id="21" data-vendor="Fortinet" data-product="FortiOS"><i class="ti ti-flag me-2"></i>수동 취약 표시</button><form method="post" action="/solutions/21/vuln-status" class="d-block" onsubmit="return confirm(&#39;Fortinet FortiOS 를 조치완료(해결)로 표시하시겠습니까?&#39;);"><input type="hidden" name="action" value="resolved"/><button type="submit" class="dropdown-item text-teal"><i class="ti ti-circle-check me-2"></i>조치완료(해결)</button></form><form method="post" action="/solutions/21/vuln-status" class="d-block" onsubmit="return confirm(&#39;Fortinet FortiOS 의 수동 상태를 해제하고 자동(n8n) 상태로 복귀하시겠습니까?&#39;);"><input type="hidden" name="action" value="auto"/><button type="submit" class="dropdown-item text-secondary"><i class="ti ti-refresh me-2"></i>자동복귀(n8n)</button></form></div></div></div></td></tr><tr id="solcves-21" class="d-none"><td colspan="7" class="bg-red-lt"><div class="p-2"><div class="card"><div class="card-body p-2"><div class="small text-muted mb-2">감지된 CVE 1건 (최근순)</div><div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>CVE</th><th>심각도</th><th>출처</th><th>공개</th><th>감지</th><th>제목</th></tr></thead><tbody><tr><td><a href="https://nvd.nist.gov/vuln/detail/CVE-2024-21762" target="_blank" rel="noopener noreferrer">CVE-2024-21762</a></td><td><span class="badge bg-red text-white">critical</span></td><td><span class="badge bg-secondary-lt">NVD</span></td><td class="text-muted small">2026-05-20</td><td class="text-muted small">2026-05-21 03:00:00</td><td class="text-truncate" style="max-width:28rem">CVE-2024-21762 설명</td></tr></tbody></table></div></div></div></div></td></tr></tbody></table></div></div></div></div></div></div><div class="modal modal-blur fade" id="solution-modal" tabindex="-1" role="dialog" aria-hidden="true"><div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable" role="document"><div class="modal-content"><div class="modal-header"><h5 class="modal-title" id="modal-title">새 솔루션 등록</h5><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div><form id="solution-form" method="post" action="/solutions"><div class="modal-body" style="max-height: calc(100vh - 200px); overflow-y: auto;"><div class="row g-3"><div class="col-md-6"><label class="form-label required">벤더</label><input type="text" name="vendor" class="form-control" required="" placeholder="예: Fortinet / Microsoft / OpenSSL"/></div><div class="col-md-6"><label class="form-label required">제품</label><input type="text" name="product" class="form-control" required="" placeholder="예: FortiOS / Windows Server / OpenSSL"/></div><div class="col-md-6"><label class="form-label required">카테고리</label><select name="category" class="form-select" required=""><option value="">선택</option><option value="OS">OS (운영체제)</option><option value="DB">DB (데이터베이스)</option><option value="HW">HW (장비/펌웨어)</option><option value="Library">Library (라이브러리)</option><option value="Crypto">Crypto (암호 라이브러리)</option><option value="WEB">WEB (웹서버)</option><option value="WAS">WAS (애플리케이션 서버)</option><option value="FW">FW (방화벽)</option><option value="WAF">WAF (웹방화벽)</option><option value="IPS">IPS (침입방지)</option><option value="IDS">IDS (침입탐지)</option><option value="DDoS">DDoS 방어</option><option value="EDR">EDR (단말 탐지)</option><option value="SIEM">SIEM (통합로그)</option><option value="VPN">VPN</option><option value="SW">SW (일반 소프트웨어)</option><option value="Other">기타</option></select><small class="text-muted">선택한 카테고리에 맞게 아래 입력 항목이 자동으로 바뀝니다.</small></div><div class="col-md-6"><label class="form-label required" id="current-version-label">현재 버전</label><input type="text" name="current_version" class="form-control" required="" placeholder="예: 1.0.0"/></div><div class="col-md-6"><label class="form-label required">그룹사</label><input type="text" name="group_company" class="form-control" list="group-company-list" placeholder="예: 본사, OO계열, 자회사A (admin 자유 입력)"/><datalist id="group-company-list"><option value="공용"></option></datalist><small class="text-muted">본인이 담당하는 그룹사만 선택 가능합니다.</small></div><div class="col-md-6"><label class="form-label">호스트명</label><input type="text" name="hostname" class="form-control" placeholder="예: fw-hq-01 / srv-app-02"/></div><div class="col-md-6"><label class="form-label">담당</label><input type="text" name="owner" class="form-control" placeholder="예: 보안팀"/></div><div class="col-12"><label class="form-label">비고</label><textarea name="notes" class="form-control" rows="2"></textarea></div><div class="col-12" id="asset-select-wrap"><label class="form-label">솔루션(자산) 연결</label><select name="asset_id" class="form-select"><option value="">새 솔루션으로 (단독 등록)</option><option value="1">SNIPER ONE-i 5300 (공용)</option><option value="2">FortiOS (공용)</option></select><small class="text-muted">기존 솔루션(자산)에 이 구성요소를 추가하거나, 비워두면 새 자산으로 단독 등록됩니다.</small><input type="hidden" id="solution-asset-id" name="asset_id_edit" value=""/></div><div class="col-12"><div class="accordion" id="advanced-accordion"><div class="accordion-item"><h2 class="accordion-header"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#advanced-collapse" aria-expanded="false" aria-controls="advanced-collapse"><i class="ti ti-shield-cog me-2"></i>매칭 담당자용 — CPE/별칭 수동 보정<span class="text-muted ms-2 small">(운영자는 무시 — 자동 처리됨)</span></button></h2><div id="advanced-collapse" class="accordion-collapse collapse" data-bs-parent="#advanced-accordion"><div class="accordion-body"><div class="row g-3"><div class="col-md-8"><label class="form-label">CPE part</label><div class="input-group"><input type="text" name="cpe_part" class="form-control font-monospace" placeholder="예: cpe:2.3:a:fortinet:fortigate"/><button type="button" id="cpe-lookup-btn" class="btn btn-outline-primary" title="NVD CPE 검색"><i class="ti ti-search"></i></button></div><small class="text-muted" id="cpe-status"></small><div id="cpe-suggestions" class="list-group list-group-flush mt-1" style="max-height: 180px; overflow-y: auto;"></div></div><div class="col-md-4"><label class="form-label">버전 범위</label><input type="text" name="cpe_version_range" class="form-control font-monospace" placeholder="예: &gt;=7.0.0,&lt;7.0.16"/><small class="text-muted">매칭 정확도 향상용</small></div><div class="col-12"><label class="form-label">CPE URI (전체)</label><input type="text" name="cpe_uri" class="form-control font-monospace" placeholder="예: cpe:2.3:a:openssl:openssl:1.1.1k:*:*:*:*:*:*:*"/><small class="text-muted">NVD CVE 매칭 정확도를 가장 크게 좌우하는 식별자.</small></div><div class="col-12"><label class="form-label">Aliases (쉼표 구분)</label><input type="text" name="aliases" class="form-control" placeholder="예: FortiGate-VM, 방화벽, fortigate, NGFW"/><small class="text-muted">한↔영 표기 변형이나 사내 자산 라벨을 적어두면 매칭 누락을 막을 수 있습니다.</small></div></div></div></div></div></div></div></div></div><div class="modal-footer"><button type="button" class="btn btn-link link-secondary" data-bs-dismiss="modal">취소</button><button type="submit" id="submit-btn" class="btn btn-primary">등록</button></div></form></div></div></div><div class="modal modal-blur fade" id="asset-modal" tabindex="-1" role="dialog" aria-hidden="true"><div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable" role="document"><div class="modal-content"><div class="modal-header"><h5 class="modal-title"><i class="ti ti-server-2 me-2"></i>장비 등록</h5><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div><form id="asset-form"><div class="modal-body" style="max-height: calc(100vh - 200px); overflow-y: auto;"><div class="alert alert-success"><strong>한 장비를 등록합니다.</strong> 벤더 / 장비모델 / Hostname / OS 버전은 필수, 나머지(HW 펌웨어, DB, OpenSSL, WEB, WAS)는 운영 중인 항목만 입력하면 됩니다. 매칭에 필요한 CPE/별칭은 시스템이 자동으로 추천합니다.</div><div class="row g-3"><div class="col-md-6"><label class="form-label required">벤더</label><input type="text" id="asset-vendor" class="form-control" required="" placeholder="예: Fortinet / Microsoft / Canonical"/><small class="text-muted">제조사. OS 자동 매핑에 사용됨.</small></div><div class="col-md-6"><label class="form-label required">장비모델</label><input type="text" id="asset-model" class="form-control" required="" placeholder="예: FortiGate-100F / Windows Server / Ubuntu 22.04"/><small class="text-muted">제품명. HW 펌웨어 등록 시 제품으로도 사용됨.</small></div><div class="col-md-6"><label class="form-label required">Hostname</label><input type="text" id="asset-hostname" class="form-control" required="" placeholder="예: fw-hq-01 / srv-app-prod-02"/></div><div class="col-md-6"><label class="form-label required">OS / 펌웨어 버전</label><input type="text" id="asset-os-version" class="form-control" required="" placeholder="예: 7.4.1 / 22.04 / 2022"/></div></div><div class="hr-text hr-text-left mt-3"><i class="ti ti-list-details me-1"></i>추가 컴포넌트 (필요한 항목만 — 빈 행은 자동 무시)</div><div class="row g-3"><div class="col-md-6"><label class="form-label">HW 펌웨어 버전</label><input type="text" id="asset-hw-version" class="form-control" placeholder="예: 1.2.3 (장비모델을 HW 제품으로 사용)"/></div><div class="col-md-6"><label class="form-label">OpenSSL 버전</label><input type="text" id="asset-openssl-version" class="form-control" placeholder="예: 1.1.1k / 3.0.5"/></div><div class="col-md-3"><label class="form-label">DB 엔진</label><select id="asset-db-engine" class="form-select"><option value="">(선택)</option><option value="MySQL">MySQL</option><option value="MariaDB">MariaDB</option><option value="PostgreSQL">PostgreSQL</option><option value="Oracle">Oracle</option><option value="MSSQL">MSSQL</option><option value="MongoDB">MongoDB</option><option value="SQLite">SQLite</option><option value="Redis">Redis</option><option value="Tibero">Tibero</option></select></div><div class="col-md-3"><label class="form-label">DB 버전</label><input type="text" id="asset-db-version" class="form-control" placeholder="예: 8.0.36"/></div><div class="col-md-3"><label class="form-label">WEB 엔진</label><select id="asset-web-engine" class="form-select"><option value="">(선택)</option><option value="Apache">Apache</option><option value="Nginx">Nginx</option><option value="IIS">IIS</option><option value="Tengine">Tengine</option><option value="Caddy">Caddy</option><option value="LiteSpeed">LiteSpeed</option></select></div><div class="col-md-3"><label class="form-label">WEB 버전</label><input type="text" id="asset-web-version" class="form-control" placeholder="예: 2.4.58"/></div><div class="col-md-3"><label class="form-label">WAS 엔진</label><select id="asset-was-engine" class="form-select"><option value="">(선택)</option><option value="Tomcat">Tomcat</option><option value="JBoss">JBoss</option><option value="WildFly">WildFly</option><option value="WebLogic">WebLogic</option><option value="WebSphere">WebSphere</option><option value="JEUS">JEUS</option></select></div><div class="col-md-3"><label class="form-label">WAS 버전</label><input type="text" id="asset-was-version" class="form-control" placeholder="예: 9.0.85"/></div></div><div class="hr-text hr-text-left mt-3"><i class="ti ti-puzzle me-1"></i>추가 컴포넌트 (OpenSSH · Docker · Redis 등 사전 슬롯 외)</div><div class="table-responsive"><table class="table table-sm table-vcenter mb-0" id="extra-components-table"><thead><tr><th style="width:25%">카테고리</th><th style="width:45%">제품</th><th style="width:25%">버전</th><th class="w-1"></th></tr></thead><tbody id="extra-components-body"></tbody></table></div><div class="mt-2"><button type="button" id="extra-add-row-btn" class="btn btn-sm btn-outline-primary" title="예: OpenSSH 9.6 / Docker 24.0.7 / Redis 7.2.4"><i class="ti ti-plus me-1"></i>다른 컴포넌트 추가 (예: OpenSSH, Docker, Redis)</button><small class="text-muted ms-2">사전 슬롯(HW/DB/OpenSSL/WEB/WAS)에 없는 항목을 자유롭게 추가할 수 있습니다.</small></div><div class="hr-text hr-text-left mt-3"><i class="ti ti-building me-1"></i>자산 메타 (선택)</div><div class="row g-3"><div class="col-md-6"><label class="form-label required">그룹사</label><input type="text" id="asset-group" class="form-control" list="asset-group-list" placeholder="예: 본사, 자회사A (admin 은 자유 입력)"/><datalist id="asset-group-list"><option value="공용"></option></datalist><small class="text-muted">본인이 담당하는 그룹사만 선택 가능합니다.</small></div><div class="col-md-6"><label class="form-label">담당</label><input type="text" id="asset-owner" class="form-control" placeholder="예: 인프라팀 / 보안팀"/></div></div><div id="asset-status" class="mt-3"></div></div><div class="modal-footer"><button type="button" class="btn btn-link link-secondary" data-bs-dismiss="modal">취소</button><button type="submit" id="asset-submit-btn" class="btn btn-success"><i class="ti ti-check me-1"></i>장비 등록</button></div></form></div></div></div><div class="modal modal-blur fade" id="bulk-modal" tabindex="-1" role="dialog" aria-hidden="true"><div class="modal-dialog modal-lg modal-dialog-centered" role="document"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">CSV 일괄 등록</h5><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div><form id="bulk-form"><div class="modal-body"><div class="alert alert-info"><strong>한 행 = 한 장비</strong>입니다. 한 장비의 OS / 펌웨어 / DB / OpenSSL / WEB / WAS 버전을 한 줄에 입력하면 시스템이 자동으로 분해해 각각의 솔루션 행으로 등록합니다.<br/><strong>필수 헤더</strong>: <code>vendor, model, hostname, os_version</code><br/><strong>선택 헤더</strong>: <code>hw_version, db_engine, db_version, openssl_version, web_engine, web_version, was_engine, was_version, group_company, owner, notes</code><br/><small class="text-muted">엔진 select 값 예시 — DB: MySQL/PostgreSQL/Oracle/MSSQL · WEB: Apache/Nginx/IIS · WAS: Tomcat/JBoss/WebLogic/WebSphere/JEUS</small><br/><a href="/static/bulk_solutions_template.csv" download="bulk_solutions_template.csv"><i class="ti ti-download me-1"></i>샘플 CSV 다운로드</a></div><div class="mb-3"><label class="form-label required">CSV 파일</label><input type="file" id="bulk-file" name="file" accept=".csv,text/csv" class="form-control" required=""/><small class="text-muted">최대 500행. UTF-8 인코딩 권장.</small></div><div id="bulk-status"></div></div><div class="modal-footer"><button type="button" class="btn btn-link link-secondary" data-bs-dismiss="modal">닫기</button><button type="submit" id="bulk-submit-btn" class="btn btn-primary"><i class="ti ti-upload me-1"></i>업로드</button></div></form></div></div></div><div class="modal modal-blur fade" id="asset-edit-modal" tabindex="-1" role="dialog" aria-hidden="true"><div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable" role="document"><div class="modal-content"><div class="modal-header"><h5 class="modal-title"><i class="ti ti-edit me-2"></i>자산 수정</h5><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div><form id="asset-edit-form" method="post" action="/solutions/asset/0"><div class="modal-body" style="max-height: calc(100vh - 200px); overflow-y: auto;"><div class="row g-3"><div class="col-md-6"><label class="form-label required">자산명</label><input type="text" name="name" class="form-control" required="" placeholder="예: SNIPER ONE-i 5300"/></div><div class="col-md-6"><label class="form-label">벤더</label><input type="text" name="vendor" class="form-control" placeholder="예: Fortinet / Microsoft"/></div><div class="col-md-6"><label class="form-label">Hostname</label><input type="text" name="hostname" class="form-control" placeholder="예: fw-hq-01"/></div><div class="col-md-6"><label class="form-label">그룹사</label><input type="text" name="group_company" class="form-control" list="asset-edit-group-list" placeholder="예: 본사 (admin 자유 입력)"/><datalist id="asset-edit-group-list"><option value="공용"></option></datalist></div><div class="col-md-6"><label class="form-label">담당</label><input type="text" name="owner" class="form-control" placeholder="예: 인프라팀 / 보안팀"/></div><div class="col-12"><label class="form-label">비고</label><textarea name="notes" class="form-control" rows="2"></textarea></div></div></div><div class="modal-footer"><button type="button" class="btn btn-link link-secondary" data-bs-dismiss="modal">취소</button><button type="submit" class="btn btn-primary"><i class="ti ti-check me-1"></i>수정 저장</button></div></form></div></div></div><div class="modal modal-blur fade" id="vuln-mark-modal" tabindex="-1" role="dialog" aria-hidden="true"><div class="modal-dialog modal-dialog-centered" role="document"><div class="modal-content"><div class="modal-header bg-red-lt"><h5 class="modal-title text-danger"><i class="ti ti-flag me-2"></i>수동 취약 표시</h5><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div><form id="vuln-mark-form" method="post" action="/solutions/0/vuln-status"><div class="modal-body"><div class="mb-3 p-2 bg-light rounded"><div class="small text-muted mb-1">대상 컴포넌트</div><div id="vuln-mark-target" class="fw-bold">—</div></div><input type="hidden" name="action" value="vulnerable"/><div class="row g-3"><div class="col-12"><label class="form-label">CVE ID <small class="text-muted">(선택)</small></label><input type="text" name="cve_id" class="form-control" placeholder="예: CVE-2024-12345 (미입력 시 자동 부여)"/></div><div class="col-md-6"><label class="form-label">심각도 <small class="text-muted">(선택)</small></label><select name="severity" class="form-select"><option value="">(선택)</option><option value="critical">critical</option><option value="high">high</option><option value="medium">medium</option><option value="low">low</option></select></div><div class="col-12"><label class="form-label">취약점 제목 <small class="text-muted">(선택)</small></label><input type="text" name="title" class="form-control" placeholder="예: 수동 확인된 취약점 요약"/></div><div class="col-12"><label class="form-label">메모 <small class="text-muted">(선택)</small></label><textarea name="note" class="form-control" rows="3" placeholder="예: 검출 근거/조치 계획"></textarea></div></div></div><div class="modal-footer"><button type="button" class="btn btn-link link-secondary" data-bs-dismiss="modal">취소</button><button type="submit" class="btn btn-danger"><i class="ti ti-flag me-1"></i>취약으로 표시</button></div></form></div></div></div><script>
+var CATEGORY_METADATA = {"OS":{"displayName":"OS (운영체제)","versionLabel":"OS 버전","versionPlaceholder":"예: 22.04 / 2022","attrs":[{"key":"architecture","label":"CPU 아키텍처","placeholder":"x86_64 / arm64"},{"key":"kernel","label":"커널 버전","placeholder":"5.15.0"},{"key":"distro","label":"배포판","placeholder":"Ubuntu / CentOS / RHEL"}]},"DB":{"displayName":"DB (데이터베이스)","versionLabel":"DB 버전","versionPlaceholder":"예: 8.0.36","attrs":[{"key":"engine","label":"엔진","placeholder":"InnoDB / PostgreSQL"},{"key":"port","label":"포트","placeholder":"3306"},{"key":"edition","label":"Edition","placeholder":"Enterprise / Community"}]},"HW":{"displayName":"HW (장비/펌웨어)","versionLabel":"펌웨어 버전","versionPlaceholder":"예: 1.2.3","attrs":[{"key":"firmware","label":"펌웨어 버전","placeholder":"1.2.3"},{"key":"model","label":"모델","placeholder":"FG-100F"},{"key":"manufacturer","label":"제조사","placeholder":"Fortinet"}]},"Library":{"displayName":"Library (라이브러리)","versionLabel":"라이브러리 버전","versionPlaceholder":"예: 1.1.1k","attrs":[{"key":"runtime","label":"런타임","placeholder":"node20 / python3.11"},{"key":"linkage","label":"링키지","placeholder":"static / dynamic"},{"key":"package_manager","label":"패키지 관리자","placeholder":"npm / pip / cargo"}]},"Crypto":{"displayName":"Crypto (암호 라이브러리)","versionLabel":"OpenSSL/암호 버전","versionPlaceholder":"예: 1.1.1k","attrs":[{"key":"protocol","label":"TLS 프로토콜","placeholder":"TLS1.2 / TLS1.3"},{"key":"fips","label":"FIPS 모드","placeholder":"true / false"},{"key":"backend","label":"암호 백엔드","placeholder":"OpenSSL / BoringSSL"}]},"WEB":{"displayName":"WEB (웹서버)","versionLabel":"웹서버 버전","versionPlaceholder":"예: 2.4.58","attrs":[{"key":"product_family","label":"제품군","placeholder":"Apache / Nginx / IIS"},{"key":"mpm","label":"MPM 모드","placeholder":"prefork / worker / event"},{"key":"ssl_backend","label":"SSL 백엔드","placeholder":"OpenSSL 1.1.1k"}]},"WAS":{"displayName":"WAS (애플리케이션 서버)","versionLabel":"WAS 버전","versionPlaceholder":"예: 9.0.85","attrs":[{"key":"product_family","label":"제품군","placeholder":"Tomcat / JBoss / WebLogic"},{"key":"jvm_version","label":"JVM 버전","placeholder":"17.0.10"},{"key":"jvm_vendor","label":"JVM 제조사","placeholder":"OpenJDK / Oracle / Corretto"}]},"FW":{"displayName":"FW (방화벽)","versionLabel":"OS/펌웨어 버전","versionPlaceholder":"예: 7.4.1","attrs":[{"key":"model","label":"모델","placeholder":"FortiGate-100F"},{"key":"license","label":"라이선스","placeholder":"Standard / Enterprise"}]},"WAF":{"displayName":"WAF (웹방화벽)","versionLabel":"WAF 버전","versionPlaceholder":"","attrs":[{"key":"mode","label":"운영 모드","placeholder":"Detection / Prevention"},{"key":"rules","label":"룰셋 버전","placeholder":"2024.05.01"}]},"IPS":{"displayName":"IPS (침입방지)","versionLabel":"IPS 버전","versionPlaceholder":"","attrs":[{"key":"signature_version","label":"시그니처 버전","placeholder":""}]},"IDS":{"displayName":"IDS (침입탐지)","versionLabel":"IDS 버전","versionPlaceholder":"","attrs":[]},"DDoS":{"displayName":"DDoS 방어","versionLabel":"버전","versionPlaceholder":"","attrs":[]},"EDR":{"displayName":"EDR (단말 탐지)","versionLabel":"EDR 버전","versionPlaceholder":"","attrs":[{"key":"agent_version","label":"에이전트 버전","placeholder":""}]},"SIEM":{"displayName":"SIEM (통합로그)","versionLabel":"SIEM 버전","versionPlaceholder":"","attrs":[]},"VPN":{"displayName":"VPN","versionLabel":"VPN 버전","versionPlaceholder":"","attrs":[]},"SW":{"displayName":"SW (일반 소프트웨어)","versionLabel":"버전","versionPlaceholder":"","attrs":[{"key":"edition","label":"Edition","placeholder":"Enterprise / Community"},{"key":"license","label":"라이선스","placeholder":"Perpetual / Subscription"}]},"Other":{"displayName":"기타","versionLabel":"버전","versionPlaceholder":"","attrs":[]}};
+document.addEventListener('DOMContentLoaded', function() {
+  // === CVE/속성 펼침 토글 (솔루션 행 + 컴포넌트 행 공통) ===
+  document.querySelectorAll('[data-toggle-cves]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var id = btn.getAttribute('data-toggle-cves');
+      var row = document.getElementById('solcves-' + id);
+      if (!row) return;
+      var hidden = row.classList.toggle('d-none');
+      btn.setAttribute('aria-expanded', String(!hidden));
+      var icon = btn.querySelector('i');
+      if (icon) {
+        icon.classList.toggle('ti-chevron-down', hidden);
+        icon.classList.toggle('ti-chevron-up', !hidden);
+      }
+    });
+  });
+
+  // === 카테고리 변경 시 current_version 라벨/placeholder 동적 갱신 ===
+  function updateVersionLabel(category) {
+    var meta = CATEGORY_METADATA[category];
+    var versionLabel = document.getElementById('current-version-label');
+    var versionInput = document.querySelector('#solution-form [name="current_version"]');
+    if (versionLabel) versionLabel.textContent = meta ? meta.versionLabel : '현재 버전';
+    if (versionInput) versionInput.setAttribute('placeholder', (meta && meta.versionPlaceholder) || '예: 1.0.0');
+  }
+  var catSelect = document.querySelector('#solution-form [name="category"]');
+  if (catSelect) {
+    catSelect.addEventListener('change', function() {
+      updateVersionLabel(catSelect.value);
+    });
+  }
+
+  // === 솔루션(구성요소) 수정 모달 채움 ===
+  var modal = document.getElementById('solution-modal');
+  if (modal) {
+    modal.addEventListener('show.bs.modal', function(event) {
+      var btn = event.relatedTarget;
+      if (!btn) return;
+      var mode = btn.getAttribute('data-mode') || 'create';
+      var form = document.getElementById('solution-form');
+      form.reset();
+      var title = document.getElementById('modal-title');
+      var submitBtn = document.getElementById('submit-btn');
+      var cpeStatus = document.getElementById('cpe-status');
+      if (cpeStatus) cpeStatus.textContent = '';
+      var cpeSuggestions = document.getElementById('cpe-suggestions');
+      if (cpeSuggestions) cpeSuggestions.innerHTML = '';
+
+      if (mode === 'edit') {
+        var id = btn.getAttribute('data-id');
+        form.action = '/solutions/' + id;
+        title.textContent = '솔루션 수정';
+        submitBtn.textContent = '수정 저장';
+        ['vendor','product','category','current_version','hostname','owner','notes','group_company','cpe_part','cpe_version_range','aliases','cpe_uri'].forEach(function(k) {
+          var attrName = 'data-' + k.replace(/_/g, '-');
+          var value = btn.getAttribute(attrName) || '';
+          var el = form.elements[k];
+          if (el) el.value = value;
+        });
+        updateVersionLabel(form.elements['category'].value);
+        // asset_id 숨김 필드 채움
+        var assetIdInput = document.getElementById('solution-asset-id');
+        if (assetIdInput) assetIdInput.value = btn.getAttribute('data-asset-id') || '';
+        // 편집 모드에서는 부모 선택 드롭다운 숨김
+        var assetSelectWrap = document.getElementById('asset-select-wrap');
+        if (assetSelectWrap) assetSelectWrap.style.display = 'none';
+      } else {
+        form.action = '/solutions';
+        title.textContent = '새 솔루션 등록';
+        submitBtn.textContent = '등록';
+        updateVersionLabel('');
+        // 생성 모드에서 부모 선택 드롭다운 표시
+        var assetSelectWrap = document.getElementById('asset-select-wrap');
+        if (assetSelectWrap) assetSelectWrap.style.display = '';
+      }
+    });
+  }
+
+  // === CPE 자동완성 (vendor/product 입력 → /api/cpe/suggest) ===
+  var cpeTimer = null;
+  function lookupCpe() {
+    var form = document.getElementById('solution-form');
+    if (!form) return;
+    var vendor = form.elements['vendor'].value.trim();
+    var product = form.elements['product'].value.trim();
+    if (vendor.length < 2 || product.length < 2) return;
+    var box = document.getElementById('cpe-suggestions');
+    var status = document.getElementById('cpe-status');
+    if (status) status.textContent = '조회 중…';
+    if (box) box.innerHTML = '';
+
+    fetch('/api/cpe/suggest?q=' + encodeURIComponent(vendor + ' ' + product), { credentials: 'same-origin' })
+      .then(function(r) { return r.json(); })
+      .then(function(j) {
+        if (!j || !j.success) {
+          if (status) status.textContent = '추천 실패 (수동 입력 가능)';
+          return;
+        }
+        var items = j.data || [];
+        if (status) status.textContent = items.length + '개 후보';
+        items.forEach(function(it) {
+          var li = document.createElement('button');
+          li.type = 'button';
+          li.className = 'list-group-item list-group-item-action py-1' + (it.deprecated ? ' text-muted' : '');
+          li.innerHTML = '<code class="me-1">' + it.cpe_part + '</code><small>' + (it.title || (it.vendor + ' / ' + it.product)) + (it.deprecated ? ' <span class="badge bg-yellow-lt ms-1">deprecated</span>' : '') + '</small>';
+          li.addEventListener('click', function() {
+            form.elements['cpe_part'].value = it.cpe_part;
+            if (status) status.textContent = '선택됨: ' + it.cpe_part;
+          });
+          if (box) box.appendChild(li);
+        });
+      })
+      .catch(function() {
+        if (status) status.textContent = '조회 실패';
+      });
+  }
+  ['vendor','product'].forEach(function(name) {
+    var el = document.querySelector('#solution-form [name="' + name + '"]');
+    if (!el) return;
+    el.addEventListener('input', function() {
+      clearTimeout(cpeTimer);
+      cpeTimer = setTimeout(lookupCpe, 500);
+    });
+  });
+  var lookupBtn = document.getElementById('cpe-lookup-btn');
+  if (lookupBtn) lookupBtn.addEventListener('click', lookupCpe);
+
+  // === 부모 자산 수정 모달 채움 ===
+  var assetEditModal = document.getElementById('asset-edit-modal');
+  if (assetEditModal) {
+    assetEditModal.addEventListener('show.bs.modal', function(event) {
+      var btn = event.relatedTarget;
+      if (!btn) return;
+      var form = document.getElementById('asset-edit-form');
+      if (!form) return;
+      var id = btn.getAttribute('data-asset-id') || '';
+      form.action = '/solutions/asset/' + id;
+      // 각 필드 채움
+      var fields = ['name','vendor','hostname','group_company','owner','notes'];
+      fields.forEach(function(k) {
+        var attrName = 'data-' + k.replace(/_/g, '-');
+        var value = btn.getAttribute(attrName) || '';
+        var el = form.elements[k];
+        if (el) el.value = value;
+      });
+    });
+  }
+
+  // === 수동 취약 표시 모달 채움 (#vuln-mark-modal) ===
+  var vulnMarkModal = document.getElementById('vuln-mark-modal');
+  if (vulnMarkModal) {
+    vulnMarkModal.addEventListener('show.bs.modal', function(event) {
+      var btn = event.relatedTarget;
+      if (!btn) return;
+      var form = document.getElementById('vuln-mark-form');
+      if (!form) return;
+      var id = btn.getAttribute('data-id') || '0';
+      form.action = '/solutions/' + id + '/vuln-status';
+      form.reset();
+      // 대상 컴포넌트 표시
+      var vendor = btn.getAttribute('data-vendor') || '';
+      var product = btn.getAttribute('data-product') || '';
+      var targetEl = document.getElementById('vuln-mark-target');
+      if (targetEl) targetEl.textContent = vendor + ' / ' + product;
+    });
+  }
+
+  // === 장비 등록 (asset modal) — equipment 형식 ===
+  var assetModal = document.getElementById('asset-modal');
+  var assetForm = document.getElementById('asset-form');
+  var extraBody = document.getElementById('extra-components-body');
+  var extraAddBtn = document.getElementById('extra-add-row-btn');
+
+  function getAssetVal(id) {
+    var el = document.getElementById(id);
+    return el ? (el.value || '').trim() : '';
+  }
+  function setAssetVal(id, v) {
+    var el = document.getElementById(id);
+    if (el) el.value = v || '';
+  }
+
+  // === 추가 컴포넌트 동적 행 ===
+  function createExtraRow() {
+    var tr = document.createElement('tr');
+    tr.className = 'extra-row';
+    var sel = '<select class="form-select form-select-sm extra-cell-category">';
+    Object.keys(CATEGORY_METADATA).forEach(function(k) {
+      var selected = k === 'Library' ? ' selected' : '';
+      sel += '<option value="' + k + '"' + selected + '>' + CATEGORY_METADATA[k].displayName + '</option>';
+    });
+    sel += '</select>';
+    tr.innerHTML =
+      '<td>' + sel + '</td>' +
+      '<td><input type="text" class="form-control form-control-sm extra-cell-product" placeholder="예: OpenSSH / Docker / Redis"></td>' +
+      '<td><input type="text" class="form-control form-control-sm extra-cell-version" placeholder="예: 9.6"></td>' +
+      '<td><button type="button" class="btn btn-sm btn-icon text-danger extra-row-remove" aria-label="행 제거"><i class="ti ti-x"></i></button></td>';
+    return tr;
+  }
+  if (extraAddBtn && extraBody) {
+    extraAddBtn.addEventListener('click', function() {
+      extraBody.appendChild(createExtraRow());
+    });
+  }
+  if (extraBody) {
+    extraBody.addEventListener('click', function(ev) {
+      var btn = ev.target.closest('.extra-row-remove');
+      if (!btn) return;
+      var tr = btn.closest('.extra-row');
+      if (tr) tr.parentNode.removeChild(tr);
+    });
+  }
+
+  // 추가 컴포넌트 행들 → JSON 배열로 수집 (빈 행 무시, 부분 입력 행은 경고)
+  function collectExtraComponents() {
+    var result = { items: [], warnings: [] };
+    if (!extraBody) return result;
+    var rows = extraBody.querySelectorAll('.extra-row');
+    rows.forEach(function(tr, idx) {
+      var cat = (tr.querySelector('.extra-cell-category')?.value || '').trim();
+      var prod = (tr.querySelector('.extra-cell-product')?.value || '').trim();
+      var ver = (tr.querySelector('.extra-cell-version')?.value || '').trim();
+      var anyFilled = cat || prod || ver;
+      if (!anyFilled) return;
+      if (!cat || !prod || !ver) {
+        result.warnings.push('추가 컴포넌트 ' + (idx + 1) + '번 행: 카테고리/제품/버전 모두 입력하거나 모두 비워주세요.');
+        return;
+      }
+      result.items.push({ category: cat, product: prod, version: ver });
+    });
+    return result;
+  }
+
+  // prefill: AssetCard 의 "구성요소 추가" 버튼에서 hostname/group 받아 채우기
+  if (assetModal) {
+    assetModal.addEventListener('show.bs.modal', function(event) {
+      var btn = event.relatedTarget;
+      ['asset-vendor','asset-model','asset-hostname','asset-os-version',
+       'asset-hw-version','asset-openssl-version',
+       'asset-db-engine','asset-db-version',
+       'asset-web-engine','asset-web-version',
+       'asset-was-engine','asset-was-version',
+       'asset-group','asset-owner'].forEach(function(id) { setAssetVal(id, ''); });
+      if (extraBody) extraBody.innerHTML = '';
+      var statusBox = document.getElementById('asset-status');
+      if (statusBox) statusBox.innerHTML = '';
+      if (btn) {
+        var preHost = btn.getAttribute('data-prefill-hostname');
+        var preGroup = btn.getAttribute('data-prefill-group');
+        if (preHost) setAssetVal('asset-hostname', preHost);
+        if (preGroup) setAssetVal('asset-group', preGroup);
+      }
+    });
+  }
+
+  if (assetForm) {
+    assetForm.addEventListener('submit', function(ev) {
+      ev.preventDefault();
+      var statusBox = document.getElementById('asset-status');
+      var submitBtn = document.getElementById('asset-submit-btn');
+
+      var vendor = getAssetVal('asset-vendor');
+      var model = getAssetVal('asset-model');
+      var hostname = getAssetVal('asset-hostname');
+      var osVersion = getAssetVal('asset-os-version');
+
+      var missing = [];
+      if (!vendor) missing.push('벤더');
+      if (!model) missing.push('장비모델');
+      if (!hostname) missing.push('Hostname');
+      if (!osVersion) missing.push('OS 버전');
+      if (missing.length > 0) {
+        statusBox.innerHTML = '<div class="alert alert-warning mb-0">필수 항목 누락: ' + missing.join(', ') + '</div>';
+        return;
+      }
+
+      var dbEng = getAssetVal('asset-db-engine');
+      var dbVer = getAssetVal('asset-db-version');
+      var webEng = getAssetVal('asset-web-engine');
+      var webVer = getAssetVal('asset-web-version');
+      var wasEng = getAssetVal('asset-was-engine');
+      var wasVer = getAssetVal('asset-was-version');
+
+      var pairWarn = [];
+      if (dbEng && !dbVer) pairWarn.push('DB 엔진(' + dbEng + ')은 버전 입력이 필요합니다.');
+      if (!dbEng && dbVer) pairWarn.push('DB 버전이 입력됐지만 엔진(MySQL/PostgreSQL 등)이 선택되지 않았습니다.');
+      if (webEng && !webVer) pairWarn.push('WEB 엔진(' + webEng + ')은 버전 입력이 필요합니다.');
+      if (!webEng && webVer) pairWarn.push('WEB 버전이 입력됐지만 엔진(Apache/Nginx 등)이 선택되지 않았습니다.');
+      if (wasEng && !wasVer) pairWarn.push('WAS 엔진(' + wasEng + ')은 버전 입력이 필요합니다.');
+      if (!wasEng && wasVer) pairWarn.push('WAS 버전이 입력됐지만 엔진(Tomcat/JBoss 등)이 선택되지 않았습니다.');
+
+      var extraCollected = collectExtraComponents();
+      if (extraCollected.warnings.length > 0) {
+        pairWarn = pairWarn.concat(extraCollected.warnings);
+      }
+
+      if (pairWarn.length > 0) {
+        statusBox.innerHTML = '<div class="alert alert-warning mb-0"><ul class="mb-0">' +
+          pairWarn.map(function(s){ return '<li>' + s + '</li>'; }).join('') +
+          '</ul></div>';
+        return;
+      }
+
+      var payload = {
+        vendor: vendor,
+        model: model,
+        hostname: hostname,
+        os_version: osVersion,
+        hw_version: getAssetVal('asset-hw-version') || null,
+        openssl_version: getAssetVal('asset-openssl-version') || null,
+        db_engine: dbEng || null,
+        db_version: dbVer || null,
+        web_engine: webEng || null,
+        web_version: webVer || null,
+        was_engine: wasEng || null,
+        was_version: wasVer || null,
+        extra_components: extraCollected.items.length > 0 ? extraCollected.items : null,
+        group_company: getAssetVal('asset-group') || null,
+        owner: getAssetVal('asset-owner') || null,
+      };
+
+      submitBtn.disabled = true;
+      statusBox.innerHTML = '<div class="text-muted"><span class="spinner-border spinner-border-sm me-2"></span>등록 중…</div>';
+
+      fetch('/api/solutions/bulk', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify([payload]),
+      })
+        .then(function(r) { return r.json().then(function(j) { return { status: r.status, body: j }; }); })
+        .then(function(res) {
+          submitBtn.disabled = false;
+          var d = res.body && res.body.data;
+          if (!d) {
+            statusBox.innerHTML = '<div class="alert alert-danger mb-0">' + (res.body && res.body.error || '알 수 없는 오류') + '</div>';
+            return;
+          }
+          var cls = d.errors.length === 0 ? 'alert-success' : 'alert-warning';
+          var html = '<div class="alert ' + cls + ' mb-2">장비 1대 등록 → <strong>' + d.created + '개 컴포넌트</strong> 저장됨';
+          if (d.errors.length > 0) html += ' / 실패 ' + d.errors.length + '건';
+          html += '</div>';
+          if (d.errors.length > 0) {
+            html += '<ul class="text-danger small">';
+            d.errors.forEach(function(e) {
+              html += '<li>' + (e.product || '') + ': ' + e.error + '</li>';
+            });
+            html += '</ul>';
+          }
+          if (d.created > 0) {
+            html += '<div class="text-muted">2초 후 페이지를 새로고침합니다…</div>';
+            setTimeout(function() { window.location.reload(); }, 2000);
+          }
+          statusBox.innerHTML = html;
+        })
+        .catch(function(err) {
+          submitBtn.disabled = false;
+          statusBox.innerHTML = '<div class="alert alert-danger mb-0">요청 실패: ' + err.message + '</div>';
+        });
+    });
+  }
+
+  // === CSV 일괄 등록 ===
+  var bulkForm = document.getElementById('bulk-form');
+  if (bulkForm) {
+    bulkForm.addEventListener('submit', function(ev) {
+      ev.preventDefault();
+      var fileInput = document.getElementById('bulk-file');
+      var statusBox = document.getElementById('bulk-status');
+      var submitBtn = document.getElementById('bulk-submit-btn');
+      if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+        statusBox.innerHTML = '<div class="alert alert-warning mb-0">파일을 선택하세요.</div>';
+        return;
+      }
+      var fd = new FormData();
+      fd.append('file', fileInput.files[0]);
+      submitBtn.disabled = true;
+      statusBox.innerHTML = '<div class="text-muted"><span class="spinner-border spinner-border-sm me-2"></span>업로드 중...</div>';
+      fetch('/api/solutions/bulk', {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: fd,
+      })
+        .then(function(r) { return r.json().then(function(j) { return { status: r.status, body: j }; }); })
+        .then(function(res) {
+          submitBtn.disabled = false;
+          var d = res.body && res.body.data;
+          if (!d) {
+            statusBox.innerHTML = '<div class="alert alert-danger mb-0">' + (res.body && res.body.error || '알 수 없는 오류') + '</div>';
+            return;
+          }
+          var cls = d.errors.length === 0 ? 'alert-success' : 'alert-warning';
+          var unitLabel = d.kind === 'equipment' ? '장비' : '솔루션';
+          var summary = d.kind === 'equipment'
+            ? '장비 ' + d.total + '대 → ' + d.created + '개 솔루션 등록'
+            : '총 ' + d.total + '건 중 ' + d.created + '건 등록';
+          var html = '<div class="alert ' + cls + ' mb-2"><strong>' + summary + '</strong>' +
+            (d.errors.length > 0 ? ' · 실패 ' + d.errors.length + '건' : '') + '</div>';
+          if (d.errors.length > 0) {
+            html += '<div class="table-responsive"><table class="table table-sm"><thead><tr><th>행</th><th>벤더</th><th>' + unitLabel + '</th><th>오류</th></tr></thead><tbody>';
+            d.errors.slice(0, 50).forEach(function(e) {
+              html += '<tr><td>' + e.row + '</td><td>' + (e.vendor || '') + '</td><td>' + (e.product || '') + '</td><td class="text-danger">' + e.error + '</td></tr>';
+            });
+            html += '</tbody></table></div>';
+            if (d.errors.length > 50) html += '<div class="text-muted">…및 ' + (d.errors.length - 50) + '건 더</div>';
+          }
+          if (d.created > 0) {
+            html += '<div class="text-muted">잠시 후 페이지를 새로고침하면 등록된 솔루션이 표시됩니다.</div>';
+          }
+          statusBox.innerHTML = html;
+        })
+        .catch(function(err) {
+          submitBtn.disabled = false;
+          statusBox.innerHTML = '<div class="alert alert-danger mb-0">요청 실패: ' + err.message + '</div>';
+        });
+    });
+  }
+});
+</script></div></div><script defer="" src="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/js/tabler.min.js"></script></body></html>

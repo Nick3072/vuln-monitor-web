@@ -1,0 +1,7 @@
+vendor,model,hostname,os_version,hw_version,db_engine,db_version,openssl_version,web_engine,web_version,was_engine,was_version,group_company,owner,notes
+Fortinet,FortiGate-100F,fw-hq-01,7.4.1,,,,1.1.1k,,,,,본사,보안팀,HA Primary
+Microsoft,Windows Server,srv-app-prod-01,2022,,MSSQL,2019,1.1.1k,IIS,10.0,,,본사,인프라팀,Std Edition
+Canonical,Ubuntu Server,web-front-01,22.04,,MySQL,8.0.36,3.0.5,Apache,2.4.58,Tomcat,9.0.85,자회사A,웹운영팀,Production
+Red Hat,Enterprise Linux,db-prod-01,9.1,,PostgreSQL,14.5,3.0.5,,,,,본사,DBA팀,
+PaloAlto,PA-3220,pa-fw-edge-01,11.0.0,11.0.0,,,,,,,,본사,보안팀,
+Cisco,Catalyst 9300,sw-core-01,17.9.4,,,,,,,,,본사,네트워크팀,
