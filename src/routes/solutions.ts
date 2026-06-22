@@ -6,9 +6,16 @@ import { triggerRematch } from '../lib/rematch'
 import { generateAliases } from '../lib/normalize'
 import { suggestCpe } from '../lib/cpe'
 import { upsertSolutionEmbedding, deleteSolutionEmbedding } from '../lib/embeddings'
-import { canWriteGroup, defaultGroupForUser } from '../middleware/permissions'
+import {
+  canWriteGroup,
+  resolveEffectiveGroup,
+  resolveWriteGroup,
+  allowedGroupsForUser,
+  canReadRowGroup,
+} from '../middleware/permissions'
 import { getAuthContext } from '../middleware/auth'
-import { resolveOrCreateAsset } from '../lib/assets'
+import { resolveOrCreateAsset, applyDerivedImpactSystem } from '../lib/assets'
+import { normalizeResolveMethod } from '../lib/history'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -119,6 +126,7 @@ export function validateSolutionInput(body: unknown): ValidationResult<SolutionI
       current_version: (b.current_version as string).trim(),
       hostname: parseOptionalString(b.hostname),
       owner: parseOptionalString(b.owner),
+      manager: parseOptionalString(b.manager),
       notes: parseOptionalString(b.notes),
       group_company: parseOptionalString(b.group_company),
       cpe_part: parseOptionalString(b.cpe_part),
@@ -152,7 +160,10 @@ async function autoEnrichCpe(env: Bindings, input: SolutionInput): Promise<{ cpe
 }
 
 app.get('/', async (c) => {
-  const group = c.req.query('group_company')
+  // v3.6 읽기 스코핑 — operator 강제 스코프, admin/system 선택/전체.
+  const scope = await resolveEffectiveGroup(c, c.req.query('group_company') ?? null)
+  if (!scope.ok) return c.json({ success: false, error: scope.error }, scope.status)
+  const group = scope.group
   const stmt = group
     ? c.env.DB.prepare(
         'SELECT * FROM solutions WHERE group_company = ? ORDER BY is_vulnerable DESC, updated_at DESC',
@@ -170,14 +181,30 @@ app.get('/', async (c) => {
 })
 
 app.get('/groups', async (c) => {
-  const { results } = await c.env.DB.prepare(
-    `SELECT group_company AS name, COUNT(*) AS total,
-            SUM(CASE WHEN is_vulnerable = 1 THEN 1 ELSE 0 END) AS vulnerable
-       FROM solutions
-      WHERE group_company IS NOT NULL AND TRIM(group_company) != ''
-      GROUP BY group_company
-      ORDER BY name`,
-  ).all<{ name: string; total: number; vulnerable: number }>()
+  // v3.6 operator 는 본인 그룹만(타테넌트 이름 누수 차단), admin/system 은 전체.
+  const allowedGroups = allowedGroupsForUser(c)
+  if (allowedGroups !== null && allowedGroups.length === 0) {
+    return c.json({ success: true, data: [], meta: { total: 0 } })
+  }
+  const stmt =
+    allowedGroups === null
+      ? c.env.DB.prepare(
+          `SELECT group_company AS name, COUNT(*) AS total,
+                  SUM(CASE WHEN is_vulnerable = 1 THEN 1 ELSE 0 END) AS vulnerable
+             FROM solutions
+            WHERE group_company IS NOT NULL AND TRIM(group_company) != ''
+            GROUP BY group_company
+            ORDER BY name`,
+        )
+      : c.env.DB.prepare(
+          `SELECT group_company AS name, COUNT(*) AS total,
+                  SUM(CASE WHEN is_vulnerable = 1 THEN 1 ELSE 0 END) AS vulnerable
+             FROM solutions
+            WHERE group_company IN (${allowedGroups.map(() => '?').join(',')})
+            GROUP BY group_company
+            ORDER BY name`,
+        ).bind(...allowedGroups)
+  const { results } = await stmt.all<{ name: string; total: number; vulnerable: number }>()
 
   const response: ApiResponse<typeof results> = {
     success: true,
@@ -201,6 +228,11 @@ app.get('/:id', async (c) => {
     return c.json({ success: false, error: 'Solution not found' }, 404)
   }
 
+  // v3.6 IDOR 가드 — 타그룹 행은 존재 노출 없이 404.
+  if (!canReadRowGroup(c, row.group_company)) {
+    return c.json({ success: false, error: 'Solution not found' }, 404)
+  }
+
   const response: ApiResponse<Solution> = { success: true, data: row }
   return c.json(response)
 })
@@ -215,10 +247,13 @@ app.post('/', async (c) => {
   const input = validated.value
   const db = c.env.DB
 
-  // v3.0 권한 검증 — group_company 미지정 시 operator 의 첫 그룹사로 자동 보정
-  if (!input.group_company) {
-    input.group_company = defaultGroupForUser(c)
+  // v3.6 그룹 쓰기 SSOT — operator 는 활성 그룹 강제(요청 group_company 무시),
+  //   admin 진입그룹/전체거부, system(n8n) requested 신뢰.
+  const wg = await resolveWriteGroup(c, input.group_company)
+  if (!wg.ok) {
+    return c.json({ success: false, error: wg.error }, wg.status)
   }
+  input.group_company = wg.group
   const perm = canWriteGroup(c, input.group_company)
   if (!perm.ok) {
     return c.json({ success: false, error: perm.error }, perm.status)
@@ -253,15 +288,16 @@ app.post('/', async (c) => {
           hostname: input.hostname,
           group_company: input.group_company,
           owner: input.owner,
+          manager: input.manager,
         })
 
   const insert = await db
     .prepare(
       `INSERT INTO solutions
-         (vendor, product, category, current_version, hostname, owner, notes, group_company,
+         (vendor, product, category, current_version, hostname, owner, manager, notes, group_company,
           cpe_part, cpe_version_range, aliases, vendor_normalized, product_normalized,
           cpe_uri, category_attributes, source, embedding_status, asset_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'api', 'pending', ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'api', 'pending', ?)`,
     )
     .bind(
       input.vendor,
@@ -270,6 +306,7 @@ app.post('/', async (c) => {
       input.current_version,
       input.hostname,
       input.owner,
+      input.manager,
       input.notes,
       input.group_company,
       cpe.cpe_part,
@@ -284,6 +321,10 @@ app.post('/', async (c) => {
     .run()
 
   const newId = Number(insert.meta.last_row_id)
+
+  // v3.3 신규 컴포넌트 반영해 자산 영향시스템 자동 재분류 (manual 보존)
+  await applyDerivedImpactSystem(db, assetId)
+
   const actor = getAuthContext(c)?.user.username ?? 'api'
   await writeAudit(db, 'create', 'solutions', newId, actor, {
     ...input,
@@ -377,7 +418,12 @@ app.post('/:id/vuln-status', async (c) => {
     return c.json<ApiResponse>({ success: false, error: msg }, 500)
   }
 
-  await writeAudit(db, `manual_vuln_${action}`, 'solutions', id, actor, { action, ...input })
+  // v3.7 resolved 면 조치 방식(method) 을 감사 payload 에 포함 → 조치 이력 화면 구분 표시.
+  const auditPayload =
+    action === 'resolved'
+      ? { action, ...input, method: normalizeResolveMethod(typeof b.method === 'string' ? b.method : null) }
+      : { action, ...input }
+  await writeAudit(db, `manual_vuln_${action}`, 'solutions', id, actor, auditPayload)
 
   const response: ApiResponse<{ solution_id: number; action: string }> = {
     success: true,
@@ -394,12 +440,18 @@ app.post('/:id/rematch', async (c) => {
 
   const db = c.env.DB
   const row = await db
-    .prepare('SELECT id FROM solutions WHERE id = ?')
+    .prepare('SELECT id, group_company FROM solutions WHERE id = ?')
     .bind(id)
-    .first<{ id: number }>()
+    .first<{ id: number; group_company: string | null }>()
 
   if (!row) {
     return c.json({ success: false, error: 'Solution not found' }, 404)
+  }
+
+  // v3.6 그룹 권한 가드 — operator 는 본인 그룹 솔루션만 rematch 트리거 가능.
+  const perm = canWriteGroup(c, row.group_company)
+  if (!perm.ok) {
+    return c.json({ success: false, error: perm.error }, perm.status)
   }
 
   const recent = await db
@@ -477,8 +529,9 @@ app.put('/:id', async (c) => {
   if (!permExisting.ok) {
     return c.json({ success: false, error: permExisting.error }, permExisting.status)
   }
+  // v3.6 수정 시 그룹 미입력이면 기존 그룹 유지(groups[0] 오이동 방지).
   if (!input.group_company) {
-    input.group_company = defaultGroupForUser(c) ?? existing.group_company
+    input.group_company = existing.group_company
   }
   const permNew = canWriteGroup(c, input.group_company)
   if (!permNew.ok) {
@@ -505,7 +558,7 @@ app.put('/:id', async (c) => {
     .prepare(
       `UPDATE solutions
           SET vendor = ?, product = ?, category = ?, current_version = ?,
-              hostname = ?, owner = ?, notes = ?, group_company = ?,
+              hostname = ?, owner = ?, manager = ?, notes = ?, group_company = ?,
               cpe_part = ?, cpe_version_range = ?, aliases = ?,
               vendor_normalized = ?, product_normalized = ?,
               cpe_uri = ?, category_attributes = ?,
@@ -520,6 +573,7 @@ app.put('/:id', async (c) => {
       input.current_version,
       input.hostname,
       input.owner,
+      input.manager,
       input.notes,
       input.group_company,
       cpe.cpe_part,

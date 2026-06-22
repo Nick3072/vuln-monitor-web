@@ -5,6 +5,25 @@ import { hashPassword } from './password'
 
 const SYSTEM_USERNAME = '_system_automation'
 
+// v3.6 그룹 매핑 INSERT 시, 레지스트리(group_companies)에도 동일 이름을 보장한다.
+//   (admin 사용자 관리에서 임의 그룹명 배정 → 레지스트리/매핑 skew = "배정됐는데 선택 불가" 방지.)
+//   예약어 'system' 은 레지스트리에 넣지 않는다(미분류 버킷이라 일반 그룹 아님).
+function groupMappingStatements(db: D1Database, userId: number, groups: string[]) {
+  return groups.flatMap((g) => {
+    const stmts = [
+      db
+        .prepare('INSERT OR IGNORE INTO user_group_companies (user_id, group_company) VALUES (?, ?)')
+        .bind(userId, g),
+    ]
+    if (g.trim().toLowerCase() !== 'system') {
+      stmts.unshift(
+        db.prepare('INSERT OR IGNORE INTO group_companies (name) VALUES (?)').bind(g),
+      )
+    }
+    return stmts
+  })
+}
+
 export function isSystemUsername(name: string): boolean {
   return name === SYSTEM_USERNAME
 }
@@ -135,10 +154,7 @@ export async function createUser(db: D1Database, input: CreateUserInput): Promis
   const userId = Number(result.meta.last_row_id)
 
   if (input.groups.length > 0) {
-    const stmts = input.groups.map((g) =>
-      db.prepare('INSERT OR IGNORE INTO user_group_companies (user_id, group_company) VALUES (?, ?)').bind(userId, g),
-    )
-    await db.batch(stmts)
+    await db.batch(groupMappingStatements(db, userId, input.groups))
   }
 
   return userId
@@ -187,10 +203,7 @@ export async function updateUser(db: D1Database, userId: number, input: UpdateUs
   if (input.groups !== undefined) {
     await db.prepare('DELETE FROM user_group_companies WHERE user_id = ?').bind(userId).run()
     if (input.groups.length > 0) {
-      const stmts = input.groups.map((g) =>
-        db.prepare('INSERT OR IGNORE INTO user_group_companies (user_id, group_company) VALUES (?, ?)').bind(userId, g),
-      )
-      await db.batch(stmts)
+      await db.batch(groupMappingStatements(db, userId, input.groups))
     }
   }
 }

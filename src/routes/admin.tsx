@@ -11,7 +11,9 @@ import {
 } from '../lib/users'
 import { getAuthContext } from '../middleware/auth'
 import { requireAdmin } from '../middleware/permissions'
+import { getActiveGroupLabel } from '../lib/active-group'
 import { writeAudit } from '../lib/audit'
+import { validatePasswordPolicy } from '../lib/password-policy'
 import { AdminUsersPage } from '../views/admin-users'
 
 // v3.0 관리자 라우트:
@@ -50,8 +52,9 @@ app.post('/bootstrap', async (c) => {
   if (!username || !password) {
     return c.json({ success: false, error: 'username/password required' }, 400)
   }
-  if (password.length < 8) {
-    return c.json({ success: false, error: 'password must be >= 8 chars' }, 400)
+  const pwCheck = validatePasswordPolicy(password)
+  if (!pwCheck.ok) {
+    return c.json({ success: false, error: pwCheck.error }, 400)
   }
   if (isSystemUsername(username)) {
     return c.json({ success: false, error: 'reserved username' }, 400)
@@ -84,6 +87,7 @@ app.get('/users', async (c) => {
   const flash = c.req.query('flash') ?? null
   const error = c.req.query('error') ?? null
   const auth = getAuthContext(c)!
+  const activeGroup = await getActiveGroupLabel(c, auth.user.id)
   return c.html(
     <AdminUsersPage
       users={users}
@@ -94,6 +98,7 @@ app.get('/users', async (c) => {
         role: auth.user.role,
         groups: auth.user.groups,
       }}
+      activeGroup={activeGroup}
     />,
   )
 })
@@ -120,8 +125,9 @@ app.post('/users', async (c) => {
   if (!username || !password) {
     return c.redirect('/admin/users?error=' + encodeURIComponent('아이디와 비밀번호는 필수입니다.'), 303)
   }
-  if (password.length < 8) {
-    return c.redirect('/admin/users?error=' + encodeURIComponent('비밀번호는 8자 이상이어야 합니다.'), 303)
+  const pwCheck = validatePasswordPolicy(password)
+  if (!pwCheck.ok) {
+    return c.redirect('/admin/users?error=' + encodeURIComponent(pwCheck.error), 303)
   }
   if (isSystemUsername(username)) {
     return c.redirect('/admin/users?error=' + encodeURIComponent('예약된 사용자명입니다.'), 303)
@@ -172,8 +178,11 @@ app.post('/users/:id', async (c) => {
     .map((s) => s.trim())
     .filter((s) => s.length > 0)
 
-  if (new_password && new_password.length < 8) {
-    return c.redirect('/admin/users?error=' + encodeURIComponent('새 비밀번호는 8자 이상이어야 합니다.'), 303)
+  if (new_password) {
+    const pwCheck = validatePasswordPolicy(new_password)
+    if (!pwCheck.ok) {
+      return c.redirect('/admin/users?error=' + encodeURIComponent(pwCheck.error), 303)
+    }
   }
 
   // 마지막 admin 비활성화/role 변경 차단

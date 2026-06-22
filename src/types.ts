@@ -13,6 +13,9 @@ export interface Bindings {
   // v3.0 부트스트랩 후엔 ADMIN_PASSWORD 제거 가능 (D1 users 테이블이 진실 공급원).
   ADMIN_PASSWORD?: string // v2.7 호환용. v3.0 부트스트랩 후 더 이상 사용되지 않음.
   SESSION_SECRET?: string // HMAC 서명 키 (32+ 자 랜덤). 없으면 세션 발급 불가능
+  // v3.5 로그인 화면 안내 (옵셔널) — 잠금/오류 시 운영자 연락처·도움말 링크 노출
+  ADMIN_CONTACT?: string // 관리자 연락처(이메일/내선 등). 미설정 시 안내 미노출
+  HELP_URL?: string // 도움말/문의 페이지 URL. 미설정 시 안내 미노출
 }
 
 // v3.0 — 다중 사용자
@@ -35,6 +38,34 @@ export interface UserWithGroups extends User {
   groups: string[]
 }
 
+// v3.6 그룹사 레지스트리 — group_companies 테이블 1행.
+//   group_company 는 NAME 문자열 키 유지. 이 레지스트리는 "존재하는 그룹사"의 정규 목록
+//   (장비 0개 그룹 포함) + 생성 메타데이터 + 삭제 가드 근거를 제공.
+export interface GroupCompany {
+  id: number
+  name: string
+  created_by_user_id: number | null
+  created_at: string
+}
+
+// 레지스트리 + 파생 카운트(선택 화면/관리 화면 목록용). 카운트는 group_company 이름으로 집계.
+export interface GroupCompanyWithCounts extends GroupCompany {
+  assetCount: number // assets 행 수 (group_company = name)
+  solutionCount: number // solutions(컴포넌트) 행 수
+  vulnerableCount: number // is_vulnerable=1 컴포넌트 수
+}
+
+// v3.5 로그인 보안 — login_attempts 테이블 (감사/잠금 판정용). success: 0/1
+export interface LoginAttempt {
+  id: number
+  username: string | null
+  ip: string | null
+  user_agent: string | null
+  success: number
+  reason: string | null
+  created_at: string
+}
+
 export type WidgetType = 'filter_preset' | 'note'
 
 export interface DashboardWidget {
@@ -55,6 +86,8 @@ export interface FilterPresetConfig {
   group_company?: string | null
   category?: string | null
   min_severity?: 'critical' | 'high' | 'medium' | 'low' | null
+  // v3.3 영향시스템 필터
+  impact_system?: ImpactSystem | null
 }
 
 // 노트 위젯 config 페이로드
@@ -70,7 +103,8 @@ export interface Solution {
   category: string
   current_version: string
   hostname: string | null
-  owner: string | null
+  owner: string | null // v3.4 의미상 "부서(department)"
+  manager: string | null // v3.4 담당자(person in charge)
   notes: string | null
   group_company: string | null
   is_vulnerable: number
@@ -112,6 +146,22 @@ export interface MarkVulnerableInput {
 }
 
 // ============================================================
+// v3.3 영향시스템(impact_system) — 회사 공식 "영향 시스템" 6종(자산 분류축).
+//   - solutions.category(컴포넌트 타입)와 직교하는 별개 차원.
+//   - 코드값 저장, 한국어 표시명은 src/views/impact-system-metadata.ts 에서 매핑.
+// ============================================================
+export type ImpactSystem =
+  | 'PC'
+  | 'SERVER'
+  | 'WEBWAS'
+  | 'DATABASE'
+  | 'NETWORK'
+  | 'APPLICATION'
+
+// 분류 출처: 'derived'=자동추론(재추론 갱신 대상) | 'manual'=운영자 확정(재추론이 안 덮음).
+export type ImpactSystemSource = 'derived' | 'manual'
+
+// ============================================================
 // v3.1 부모 "솔루션"(자산) 엔티티 — assets 테이블
 //   - 운영자가 등록·관리하는 단위. 하나의 자산이 OS/HW/OpenSSL 등 컴포넌트 N개를 소유.
 //   - 자연키: (group_company, hostname). hostname 이 비어있으면 단독 자산.
@@ -123,10 +173,14 @@ export interface Asset {
   vendor: string | null
   hostname: string | null
   group_company: string | null
-  owner: string | null
+  owner: string | null // v3.4 의미상 "부서(department)"
+  manager: string | null // v3.4 담당자(person in charge)
   notes: string | null
   created_at: string
   updated_at: string
+  // v3.3 영향시스템 주 분류 (단일값). NULL = 미설정.
+  impact_system: ImpactSystem | null
+  impact_system_source: ImpactSystemSource | null
 }
 
 // assets + 소속 컴포넌트(solutions) 묶음 — 그룹 뷰 렌더용
@@ -144,8 +198,11 @@ export interface AssetInput {
   vendor: string | null
   hostname: string | null
   group_company: string | null
-  owner: string | null
+  owner: string | null // 부서(department)
+  manager: string | null // 담당자(person in charge)
   notes: string | null
+  // v3.3 영향시스템 주 분류. 옵셔널(후방호환). 운영자가 지정하면 source='manual' 로 저장.
+  impact_system?: ImpactSystem | null
 }
 
 export interface SolutionInput {
@@ -154,7 +211,8 @@ export interface SolutionInput {
   category: string
   current_version: string
   hostname: string | null
-  owner: string | null
+  owner: string | null // 부서(department)
+  manager: string | null // 담당자(person in charge)
   notes: string | null
   group_company: string | null
   cpe_part: string | null

@@ -1,8 +1,11 @@
 import { Hono } from 'hono'
 import type { Bindings } from './types'
 import { sessionOrBearerAuth } from './middleware/auth'
+import { cleanupOldAttempts } from './lib/login-attempts'
 import auth from './routes/auth'
+import groups from './routes/groups'
 import admin from './routes/admin'
+import account from './routes/account'
 import solutions from './routes/solutions'
 import bulk from './routes/bulk'
 import widgets from './routes/widgets'
@@ -26,7 +29,7 @@ app.get('/api/health', (c) =>
   }),
 )
 
-// /login (GET/POST), /logout (POST/GET) — 운영자 인증 자체를 위한 라우트라 인증 미들웨어 적용 불가
+// /login (GET/POST), /logout (POST 전용) — 운영자 인증 자체를 위한 라우트라 인증 미들웨어 적용 불가
 app.route('/', auth)
 
 // === 인증 보호 라우트 ===
@@ -34,7 +37,13 @@ app.route('/', auth)
 const protectedApp = new Hono<{ Bindings: Bindings }>()
 protectedApp.use('*', sessionOrBearerAuth)
 
+// v3.6 그룹사 선택/생성/삭제 — web 보다 먼저 마운트.
+//   /select-group, /groups* 는 자체 라우트로 처리되며 그룹 스코프 게이트 대상이 아니다.
+protectedApp.route('/', groups)
+
 // HTML 페이지 + 폼 POST (web.tsx)
+//   대시보드 GET '/' 와 GET '/solutions' 는 핸들러 내부에서 resolveEffectiveGroup 으로
+//   활성 그룹을 강제·검증하고 미선택/무권한 시 /select-group 으로 리다이렉트한다(자체 게이트).
 protectedApp.route('/', web)
 
 // v3.0 관리자 (사용자 CRUD + 부트스트랩) — sessionOrBearerAuth 통과 후 admin 내부 requireAdmin 으로 추가 보호
@@ -42,6 +51,9 @@ protectedApp.route('/admin', admin)
 
 // v3.0 대시보드 위젯 CRUD — 로그인 사용자는 모두 추가 가능
 protectedApp.route('/dashboard/widgets', widgets)
+
+// v3.x 내 계정 (비밀번호 변경 등) — 인증 보호 영역, 로그인 사용자 본인만 접근
+protectedApp.route('/account', account)
 
 // JSON API
 const api = new Hono<{ Bindings: Bindings }>()
@@ -62,4 +74,14 @@ app.onError((err, c) => {
   return c.json({ success: false, error: message }, 500)
 })
 
-export default app
+// v3.5 Worker 엔트리 — fetch(HTTP) + scheduled(Cron).
+// scheduled: login_attempts 보존기간 초과분을 일일 정리. 로그인 성공 경로에만
+// 의존하지 않도록 독립 실행(cleanupOldAttempts 는 절대 throw 하지 않음).
+const handler: ExportedHandler<Bindings> = {
+  fetch: (request, env, ctx) => app.fetch(request, env, ctx),
+  scheduled: (_controller, env, ctx) => {
+    ctx.waitUntil(cleanupOldAttempts(env.DB))
+  },
+}
+
+export default handler

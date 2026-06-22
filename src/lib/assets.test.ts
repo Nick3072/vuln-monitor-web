@@ -19,6 +19,8 @@ import {
   getAssetsWithComponents,
   countUnlinkedComponents,
   backfillAssets,
+  recomputeImpactSystems,
+  getImpactSystemSummary,
 } from './assets'
 
 // D1Database 타입을 shim 으로 캐스팅하는 헬퍼
@@ -440,5 +442,263 @@ describe('countUnlinkedComponents', () => {
 
     const countPublic = await countUnlinkedComponents(db, { group: '공용' })
     expect(countPublic).toBe(1)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────
+// 8. v3.3 impact_system 전파 (Phase 1)
+// ─────────────────────────────────────────────────────────────
+describe('impact_system 전파', () => {
+  it('resolveOrCreateAsset 가 impact_system / source 를 저장한다', async () => {
+    const shim = makeDb()
+    const db = asDb(shim)
+
+    const id = await resolveOrCreateAsset(db, {
+      name: 'fw-01',
+      vendor: 'Fortinet',
+      hostname: 'fw-01',
+      group_company: '본사',
+      owner: null,
+      impact_system: 'NETWORK',
+      impact_system_source: 'derived',
+    })
+
+    const asset = await getAssetById(db, id)
+    expect(asset?.impact_system).toBe('NETWORK')
+    expect(asset?.impact_system_source).toBe('derived')
+  })
+
+  it('impact_system 미지정 시 NULL 로 저장된다 (후방호환)', async () => {
+    const shim = makeDb()
+    const db = asDb(shim)
+
+    const id = await resolveOrCreateAsset(db, {
+      name: 'x',
+      vendor: 'V',
+      hostname: 'h',
+      group_company: null,
+      owner: null,
+    })
+
+    const asset = await getAssetById(db, id)
+    expect(asset?.impact_system).toBeNull()
+    expect(asset?.impact_system_source).toBeNull()
+  })
+
+  it('updateAsset: impact_system 지정 시 source=manual 로 설정', async () => {
+    const shim = makeDb()
+    const db = asDb(shim)
+    const id = await resolveOrCreateAsset(db, {
+      name: 'srv', vendor: 'V', hostname: 'srv', group_company: null, owner: null,
+      impact_system: 'NETWORK', impact_system_source: 'derived',
+    })
+
+    await updateAsset(db, id, {
+      name: 'srv', vendor: 'V', hostname: 'srv', group_company: null, owner: null, notes: null,
+      impact_system: 'SERVER',
+    })
+
+    const asset = await getAssetById(db, id)
+    expect(asset?.impact_system).toBe('SERVER')
+    expect(asset?.impact_system_source).toBe('manual')
+  })
+
+  it('updateAsset: impact_system 필드 미포함 시 기존 분류를 보존한다', async () => {
+    const shim = makeDb()
+    const db = asDb(shim)
+    const id = await resolveOrCreateAsset(db, {
+      name: 'db', vendor: 'V', hostname: 'db', group_company: null, owner: null,
+      impact_system: 'DATABASE', impact_system_source: 'manual',
+    })
+
+    // 기존 수정 폼(impact_system 필드 없음) 시뮬레이션
+    await updateAsset(db, id, {
+      name: 'db-renamed', vendor: 'V', hostname: 'db', group_company: null, owner: null, notes: 'memo',
+    })
+
+    const asset = await getAssetById(db, id)
+    expect(asset?.name).toBe('db-renamed')
+    expect(asset?.impact_system).toBe('DATABASE') // 보존
+    expect(asset?.impact_system_source).toBe('manual') // 보존
+  })
+
+  it('getAssetsWithComponents 가 impactSystem 으로 필터링한다', async () => {
+    const shim = makeDb()
+    const db = asDb(shim)
+
+    const netId = await resolveOrCreateAsset(db, {
+      name: 'fw', vendor: 'Fortinet', hostname: 'fw', group_company: '본사', owner: null,
+      impact_system: 'NETWORK', impact_system_source: 'derived',
+    })
+    await seedSolution(shim, { asset_id: netId, category: 'FW', group_company: '본사', hostname: 'fw' })
+
+    const dbId = await resolveOrCreateAsset(db, {
+      name: 'mysql', vendor: 'Oracle', hostname: 'db', group_company: '본사', owner: null,
+      impact_system: 'DATABASE', impact_system_source: 'manual',
+    })
+    await seedSolution(shim, { asset_id: dbId, category: 'DB', group_company: '본사', hostname: 'db' })
+
+    const networkOnly = await getAssetsWithComponents(db, { impactSystem: 'NETWORK' })
+    expect(networkOnly).toHaveLength(1)
+    expect(networkOnly[0].asset.impact_system).toBe('NETWORK')
+
+    const all = await getAssetsWithComponents(db, {})
+    expect(all).toHaveLength(2)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────
+// 9. v3.3 recomputeImpactSystems (Phase 2)
+// ─────────────────────────────────────────────────────────────
+describe('recomputeImpactSystems', () => {
+  it('미설정 자산을 컴포넌트 집계로 추론해 채운다', async () => {
+    const shim = makeDb()
+    const db = asDb(shim)
+
+    // 미설정 자산 + FW 컴포넌트 → NETWORK 로 추론돼야 함
+    const id = await resolveOrCreateAsset(db, { name: 'fw', vendor: 'F', hostname: 'fw', group_company: null, owner: null })
+    await seedSolution(shim, { asset_id: id, category: 'FW', hostname: 'fw' })
+
+    const res = await recomputeImpactSystems(db)
+    expect(res.updated).toBe(1)
+
+    const asset = await getAssetById(db, id)
+    expect(asset?.impact_system).toBe('NETWORK')
+    expect(asset?.impact_system_source).toBe('derived')
+  })
+
+  it('manual 자산은 절대 덮어쓰지 않는다', async () => {
+    const shim = makeDb()
+    const db = asDb(shim)
+
+    // 운영자가 PC 로 확정했지만 컴포넌트는 DB → 추론값(DATABASE)이 덮으면 안 됨
+    const id = await resolveOrCreateAsset(db, {
+      name: 'host', vendor: 'V', hostname: 'host', group_company: null, owner: null,
+      impact_system: 'PC', impact_system_source: 'manual',
+    })
+    await seedSolution(shim, { asset_id: id, category: 'DB', hostname: 'host' })
+
+    const res = await recomputeImpactSystems(db)
+    expect(res.scanned).toBe(0) // manual 은 후보에서 제외
+    expect(res.updated).toBe(0)
+
+    const asset = await getAssetById(db, id)
+    expect(asset?.impact_system).toBe('PC') // 보존
+  })
+
+  it('dryRun 은 쓰지 않고 변경 계획만 반환한다', async () => {
+    const shim = makeDb()
+    const db = asDb(shim)
+    const id = await resolveOrCreateAsset(db, { name: 'db', vendor: 'V', hostname: 'db', group_company: null, owner: null })
+    await seedSolution(shim, { asset_id: id, category: 'DB', hostname: 'db' })
+
+    const res = await recomputeImpactSystems(db, { dryRun: true })
+    expect(res.updated).toBe(0)
+    expect(res.changes).toEqual([{ assetId: id, from: null, to: 'DATABASE' }])
+
+    const asset = await getAssetById(db, id)
+    expect(asset?.impact_system).toBeNull() // 미반영
+  })
+
+  it('이미 derived 로 채워진 자산은 추론 결과가 같으면 변경 없음', async () => {
+    const shim = makeDb()
+    const db = asDb(shim)
+    const id = await resolveOrCreateAsset(db, {
+      name: 'fw', vendor: 'F', hostname: 'fw', group_company: null, owner: null,
+      impact_system: 'NETWORK', impact_system_source: 'derived',
+    })
+    await seedSolution(shim, { asset_id: id, category: 'FW', hostname: 'fw' })
+
+    const res = await recomputeImpactSystems(db)
+    expect(res.scanned).toBe(1)
+    expect(res.updated).toBe(0)
+    expect(res.changes).toHaveLength(0)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────
+// 10. v3.3 getImpactSystemSummary (Phase 4)
+// ─────────────────────────────────────────────────────────────
+describe('getImpactSystemSummary', () => {
+  it('영향시스템별 자산/취약 집계', async () => {
+    const shim = makeDb()
+    const db = asDb(shim)
+
+    // NETWORK 자산 2개 (하나는 취약 컴포넌트 보유)
+    const fw1 = await resolveOrCreateAsset(db, { name: 'fw1', vendor: 'F', hostname: 'fw1', group_company: '본사', owner: null, impact_system: 'NETWORK', impact_system_source: 'derived' })
+    await seedSolution(shim, { asset_id: fw1, category: 'FW', hostname: 'fw1', group_company: '본사', is_vulnerable: 1 })
+    const fw2 = await resolveOrCreateAsset(db, { name: 'fw2', vendor: 'F', hostname: 'fw2', group_company: '본사', owner: null, impact_system: 'NETWORK', impact_system_source: 'derived' })
+    await seedSolution(shim, { asset_id: fw2, category: 'FW', hostname: 'fw2', group_company: '본사', is_vulnerable: 0 })
+
+    // DATABASE 자산 1개
+    const db1 = await resolveOrCreateAsset(db, { name: 'db1', vendor: 'O', hostname: 'db1', group_company: '본사', owner: null, impact_system: 'DATABASE', impact_system_source: 'manual' })
+    await seedSolution(shim, { asset_id: db1, category: 'DB', hostname: 'db1', group_company: '본사', is_vulnerable: 1 })
+
+    const summary = await getImpactSystemSummary(db, {})
+    const byCode = new Map(summary.map((r) => [r.impact_system, r]))
+
+    expect(byCode.get('NETWORK')?.assetCount).toBe(2)
+    expect(byCode.get('NETWORK')?.vulnerableAssetCount).toBe(1)
+    expect(byCode.get('DATABASE')?.assetCount).toBe(1)
+    expect(byCode.get('DATABASE')?.vulnerableComponentCount).toBe(1)
+  })
+
+  it('미분류(null) 자산도 집계에 포함된다', async () => {
+    const shim = makeDb()
+    const db = asDb(shim)
+    await resolveOrCreateAsset(db, { name: 'x', vendor: 'V', hostname: 'x', group_company: null, owner: null })
+
+    const summary = await getImpactSystemSummary(db, {})
+    const unclassified = summary.find((r) => r.impact_system === null)
+    expect(unclassified?.assetCount).toBe(1)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────
+// 11. v3.5 getAssetsWithComponents 신규 필터 (vulnerableOnly/safeOnly/search)
+// ─────────────────────────────────────────────────────────────
+describe('getAssetsWithComponents 추가 필터', () => {
+  it('vulnerableOnly: 취약 컴포넌트 있는 자산만 + 취약 컴포넌트만 표시', async () => {
+    const shim = makeDb()
+    const db = asDb(shim)
+    const aId = await resolveOrCreateAsset(db, { name: 'srv', vendor: 'V', hostname: 'srv', group_company: null, owner: null })
+    await seedSolution(shim, { asset_id: aId, hostname: 'srv', category: 'OS', is_vulnerable: 0 })
+    await seedSolution(shim, { asset_id: aId, hostname: 'srv', category: 'DB', is_vulnerable: 1 })
+    // 취약 컴포넌트 없는 자산
+    const bId = await resolveOrCreateAsset(db, { name: 'clean', vendor: 'V', hostname: 'clean', group_company: null, owner: null })
+    await seedSolution(shim, { asset_id: bId, hostname: 'clean', category: 'OS', is_vulnerable: 0 })
+
+    const res = await getAssetsWithComponents(db, { vulnerableOnly: true })
+    expect(res).toHaveLength(1)
+    expect(res[0].asset.id).toBe(aId)
+    expect(res[0].components.every((c) => c.is_vulnerable === 1)).toBe(true)
+  })
+
+  it('safeOnly: 정상 컴포넌트 있는 자산만', async () => {
+    const shim = makeDb()
+    const db = asDb(shim)
+    const aId = await resolveOrCreateAsset(db, { name: 'srv', vendor: 'V', hostname: 'srv', group_company: null, owner: null })
+    await seedSolution(shim, { asset_id: aId, hostname: 'srv', category: 'OS', is_vulnerable: 0 })
+    const bId = await resolveOrCreateAsset(db, { name: 'allvuln', vendor: 'V', hostname: 'allvuln', group_company: null, owner: null })
+    await seedSolution(shim, { asset_id: bId, hostname: 'allvuln', category: 'DB', is_vulnerable: 1 })
+
+    const res = await getAssetsWithComponents(db, { safeOnly: true })
+    expect(res.map((r) => r.asset.id)).toEqual([aId])
+  })
+
+  it('search: 자산명/호스트명/컴포넌트 벤더·제품 매칭', async () => {
+    const shim = makeDb()
+    const db = asDb(shim)
+    const aId = await resolveOrCreateAsset(db, { name: 'FortiGate-100F', vendor: 'Fortinet', hostname: 'fw-01', group_company: null, owner: null })
+    await seedSolution(shim, { asset_id: aId, hostname: 'fw-01', vendor: 'Fortinet', product: 'FortiOS', category: 'FW' })
+    const bId = await resolveOrCreateAsset(db, { name: 'db-host', vendor: 'Oracle', hostname: 'db-01', group_company: null, owner: null })
+    await seedSolution(shim, { asset_id: bId, hostname: 'db-01', vendor: 'Oracle', product: 'MySQL', category: 'DB' })
+
+    // 컴포넌트 제품명으로 검색
+    const byProduct = await getAssetsWithComponents(db, { search: 'mysql' })
+    expect(byProduct.map((r) => r.asset.id)).toEqual([bId])
+    // 자산명으로 검색
+    const byName = await getAssetsWithComponents(db, { search: 'fortigate' })
+    expect(byName.map((r) => r.asset.id)).toEqual([aId])
   })
 })

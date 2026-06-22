@@ -1,7 +1,9 @@
 import { Layout } from './layout'
 import { raw } from 'hono/html'
-import type { DashboardWidget, MatchedVuln } from '../types'
+import type { DashboardWidget, MatchedVuln, ImpactSystem } from '../types'
 import { CATEGORY_KEYS, CATEGORY_METADATA, categoryDisplayName } from './category-metadata'
+import { impactSystemLabel, IMPACT_SYSTEM_OPTIONS } from './impact-system-metadata'
+import { ALL_GROUPS_SENTINEL } from '../lib/active-group'
 
 export interface DashboardStats {
   total: number
@@ -22,6 +24,15 @@ export interface CategorySummary {
   name: string
   total: number
   vulnerable: number
+}
+
+// v3.3 영향시스템별 자산 집계
+export interface ImpactSystemSummary {
+  impact_system: string | null // null = 미분류
+  assetCount: number
+  vulnerableAssetCount: number
+  componentCount: number
+  vulnerableComponentCount: number
 }
 
 export interface LatestMatch {
@@ -50,7 +61,9 @@ interface DashboardProps {
   stats: DashboardStats
   groupSummaries: GroupSummary[]
   categorySummaries: CategorySummary[]
+  impactSummaries?: ImpactSystemSummary[]
   activeGroup: string | null
+  isAggregate?: boolean // admin '전체' 뷰 여부 (operator 는 항상 false)
   recentGroups: SolutionMatchGroup[]
   widgets: DashboardWidget[]
   flash?: string | null
@@ -71,8 +84,10 @@ export function Dashboard(props: DashboardProps) {
     ? `구성요소 ${props.stats.componentTotal ?? props.stats.total}개 · 취약 ${props.stats.vulnerable}`
     : `정상 ${healthy} · 취약 ${props.stats.vulnerable}`
 
+  const isAdmin = props.currentUser?.role === 'admin'
+
   return (
-    <Layout title="대시보드" currentPath="/" currentUser={props.currentUser}>
+    <Layout title="대시보드" currentPath="/" currentUser={props.currentUser} activeGroup={props.activeGroup}>
       <div class="page-header d-print-none">
         <div class="container-xl">
           <div class="row g-2 align-items-center">
@@ -104,14 +119,14 @@ export function Dashboard(props: DashboardProps) {
             <div class="alert alert-success alert-dismissible mb-3" role="alert">
               <i class="ti ti-circle-check me-2"></i>
               {props.flash}
-              <a class="btn-close" data-bs-dismiss="alert" aria-label="close"></a>
+              <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="닫기"></button>
             </div>
           ) : null}
           {props.error ? (
             <div class="alert alert-danger alert-dismissible mb-3" role="alert">
               <i class="ti ti-alert-circle me-2"></i>
               {props.error}
-              <a class="btn-close" data-bs-dismiss="alert" aria-label="close"></a>
+              <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="닫기"></button>
             </div>
           ) : null}
 
@@ -148,12 +163,33 @@ export function Dashboard(props: DashboardProps) {
             />
           </div>
 
-          {props.groupSummaries.length > 0 ? (
-            <GroupFilterBar
-              groups={props.groupSummaries}
-              activeGroup={props.activeGroup}
-            />
+          {props.activeGroup && (props.stats.assetTotal ?? 0) === 0 ? (
+            <div class="alert alert-info alert-dismissible mt-3" role="alert">
+              <i class="ti ti-info-circle me-2"></i>
+              이 그룹사에는 아직 등록된 장비가 없습니다. <a href="/solutions" class="alert-link">솔루션 관리</a>에서 장비를 등록하세요.
+              <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="닫기"></button>
+            </div>
           ) : null}
+
+          <DashboardCharts
+            impactSummaries={props.impactSummaries ?? []}
+            groupSummaries={props.groupSummaries}
+          />
+
+          {/* v3.6 admin: 전체+그룹별 전환 바. operator: 읽기전용 스코프 표시(타그룹 노출 금지). */}
+          {isAdmin ? (
+            props.groupSummaries.length > 0 ? (
+              <GroupFilterBar
+                groups={props.groupSummaries}
+                activeGroup={props.activeGroup}
+                isAggregate={props.isAggregate ?? props.activeGroup === null}
+              />
+            ) : null
+          ) : (
+            <ScopeIndicator activeGroup={props.activeGroup} />
+          )}
+
+          <ImpactSystemGrid items={props.impactSummaries ?? []} activeGroup={props.activeGroup} />
 
           <CategoryGrid items={props.categorySummaries} activeGroup={props.activeGroup} />
 
@@ -266,9 +302,11 @@ document.addEventListener('DOMContentLoaded', function() {
         var g = (document.getElementById('filter-group') || {}).value || '';
         var c = (document.getElementById('filter-category') || {}).value || '';
         var s = (document.getElementById('filter-severity') || {}).value || '';
+        var im = (document.getElementById('filter-impact') || {}).value || '';
         if (g.trim()) cfg.group_company = g.trim();
         if (c.trim()) cfg.category = c.trim();
         if (s.trim()) cfg.min_severity = s.trim();
+        if (im.trim()) cfg.impact_system = im.trim();
         if (Object.keys(cfg).length === 0) {
           ev.preventDefault();
           alert('필터 항목을 최소 1개 이상 선택해주세요.');
@@ -299,9 +337,11 @@ document.addEventListener('DOMContentLoaded', function() {
         var g = (form.querySelector('.widget-edit-group') || {}).value || '';
         var c = (form.querySelector('.widget-edit-cat') || {}).value || '';
         var s = (form.querySelector('.widget-edit-sev') || {}).value || '';
+        var im = (form.querySelector('.widget-edit-impact') || {}).value || '';
         if (g.trim()) cfg.group_company = g.trim();
         if (c.trim()) cfg.category = c.trim();
         if (s.trim()) cfg.min_severity = s.trim();
+        if (im.trim()) cfg.impact_system = im.trim();
       } else {
         var content = ((form.querySelector('.widget-edit-content') || {}).value || '').trim();
         var color = (form.querySelector('.widget-edit-color') || {}).value || 'blue';
@@ -312,9 +352,192 @@ document.addEventListener('DOMContentLoaded', function() {
       if (hidden) hidden.value = JSON.stringify(cfg);
     });
   });
+
+  // === v3.6 ApexCharts 초기화 (도넛/스택막대). CDN 실패 시 가드로 무차트 폴백 ===
+  if (window.ApexCharts) {
+    document.querySelectorAll('[data-vm-donut]').forEach(function(el) {
+      try {
+        var series = JSON.parse(el.getAttribute('data-series') || '[]');
+        var labels = JSON.parse(el.getAttribute('data-labels') || '[]');
+        var colors = JSON.parse(el.getAttribute('data-colors') || '[]');
+        if (!series.length) { el.innerHTML = '<div class="text-muted small text-center py-5">데이터 없음</div>'; return; }
+        new ApexCharts(el, {
+          chart: { type: 'donut', height: 260, fontFamily: 'inherit' },
+          series: series, labels: labels, colors: colors,
+          legend: { position: 'bottom' }, dataLabels: { enabled: false },
+          plotOptions: { pie: { donut: { size: '64%' } } },
+          stroke: { width: 2 }
+        }).render();
+      } catch (e) {}
+    });
+    document.querySelectorAll('[data-vm-stackbar]').forEach(function(el) {
+      try {
+        var cats = JSON.parse(el.getAttribute('data-categories') || '[]');
+        var vuln = JSON.parse(el.getAttribute('data-vuln') || '[]');
+        var safe = JSON.parse(el.getAttribute('data-safe') || '[]');
+        if (!cats.length) { el.innerHTML = '<div class="text-muted small text-center py-5">데이터 없음</div>'; return; }
+        new ApexCharts(el, {
+          chart: { type: 'bar', height: 260, stacked: true, fontFamily: 'inherit', toolbar: { show: false } },
+          plotOptions: { bar: { horizontal: true, borderRadius: 4, barHeight: '62%' } },
+          series: [{ name: '취약', data: vuln }, { name: '정상', data: safe }],
+          colors: ['#d63939', '#a8d5b5'],
+          xaxis: { categories: cats },
+          legend: { position: 'bottom' }, dataLabels: { enabled: false },
+          grid: { borderColor: 'rgba(20,30,60,.08)' }
+        }).render();
+      } catch (e) {}
+    });
+  }
 });
 </script>`)}
     </Layout>
+  )
+}
+
+// v3.6 대시보드 차트 (ApexCharts) — 영향시스템 도넛 + 그룹사 취약/정상 스택 막대.
+// 데이터는 data-* 속성으로 주입, layout.tsx 의 init 스크립트가 클라이언트에서 렌더.
+const IMPACT_DONUT_COLORS: Record<string, string> = {
+  PC: '#4299e1',
+  SERVER: '#4263eb',
+  WEBWAS: '#2fb344',
+  DATABASE: '#f76707',
+  NETWORK: '#206bc4',
+  APPLICATION: '#ae3ec9',
+}
+
+function DashboardCharts(props: {
+  impactSummaries: ImpactSystemSummary[]
+  groupSummaries: GroupSummary[]
+}) {
+  const order = IMPACT_SYSTEM_OPTIONS.map((o) => o.code as string)
+  const sortedImp = [...props.impactSummaries]
+    .filter((s) => s.assetCount > 0)
+    .sort((a, b) => {
+      const ai = a.impact_system ? order.indexOf(a.impact_system) : 99
+      const bi = b.impact_system ? order.indexOf(b.impact_system) : 99
+      return ai - bi
+    })
+  const donutSeries = sortedImp.map((s) => s.assetCount)
+  const donutLabels = sortedImp.map((s) => impactSystemLabel(s.impact_system))
+  const donutColors = sortedImp.map((s) =>
+    s.impact_system ? IMPACT_DONUT_COLORS[s.impact_system] ?? '#868e96' : '#adb5bd',
+  )
+
+  const cats = props.groupSummaries.map((g) => g.name)
+  const vuln = props.groupSummaries.map((g) => g.vulnerable)
+  const safe = props.groupSummaries.map((g) => Math.max(0, g.total - g.vulnerable))
+
+  if (donutSeries.length === 0 && cats.length === 0) return null
+
+  return (
+    <div class="row row-deck row-cards mt-1">
+      <div class="col-12 col-lg-5">
+        <div class="card">
+          <div class="card-header py-2">
+            <h3 class="card-title mb-0">
+              <i class="ti ti-chart-donut-3 me-1 text-purple"></i>영향 시스템 분포 (자산 수)
+            </h3>
+          </div>
+          <div class="card-body">
+            <div
+              data-vm-donut
+              data-series={JSON.stringify(donutSeries)}
+              data-labels={JSON.stringify(donutLabels)}
+              data-colors={JSON.stringify(donutColors)}
+              style="min-height:260px"
+            ></div>
+          </div>
+        </div>
+      </div>
+      <div class="col-12 col-lg-7">
+        <div class="card">
+          <div class="card-header py-2">
+            <h3 class="card-title mb-0">
+              <i class="ti ti-chart-bar me-1 text-blue"></i>그룹사별 취약 · 정상 (솔루션 수)
+            </h3>
+          </div>
+          <div class="card-body">
+            <div
+              data-vm-stackbar
+              data-categories={JSON.stringify(cats)}
+              data-vuln={JSON.stringify(vuln)}
+              data-safe={JSON.stringify(safe)}
+              style="min-height:260px"
+            ></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// v3.3 영향시스템(자산 분류축)별 현황 — category(컴포넌트 수)와 의미가 다르므로 별도 섹션·라벨.
+function ImpactSystemGrid(props: { items: ImpactSystemSummary[]; activeGroup: string | null }) {
+  if (props.items.length === 0) return null
+  const scopeLabel = props.activeGroup ? `— ${props.activeGroup}` : ''
+  // 정렬: 정의된 6종 순서 → 미분류는 맨 뒤
+  const order = new Map(IMPACT_SYSTEM_OPTIONS.map((o, i) => [o.code as string, i]))
+  const sorted = [...props.items].sort((a, b) => {
+    const ai = a.impact_system ? order.get(a.impact_system) ?? 98 : 99
+    const bi = b.impact_system ? order.get(b.impact_system) ?? 98 : 99
+    return ai - bi
+  })
+  return (
+    <div class="row row-cards mt-3">
+      <div class="col-12">
+        <div class="card">
+          <div class="card-header py-2">
+            <h3 class="card-title mb-0">
+              <i class="ti ti-affiliate me-1 text-purple"></i>
+              영향 시스템별 현황 (자산 수) {scopeLabel}
+            </h3>
+            <div class="card-actions">
+              <span class="text-muted small">총 {sorted.length}종</span>
+            </div>
+          </div>
+          <div class="card-body p-2">
+            <div class="row g-2">
+              {sorted.map((s) => {
+                const inner = (
+                  <div class="card-body p-2 text-center">
+                    <div class="text-muted small text-truncate">
+                      {impactSystemLabel(s.impact_system)}
+                    </div>
+                    <div class="h3 mb-1 mt-1">{s.assetCount}</div>
+                    {s.vulnerableAssetCount > 0 ? (
+                      <span class="badge bg-red text-white">취약 {s.vulnerableAssetCount}</span>
+                    ) : (
+                      <span class="badge bg-green-lt">정상</span>
+                    )}
+                  </div>
+                )
+                return (
+                  <div class="col-6 col-md-4 col-lg-3 col-xl-2">
+                    {s.impact_system ? (
+                      <a
+                        href={`/solutions?${
+                          props.activeGroup
+                            ? `group=${encodeURIComponent(props.activeGroup)}&`
+                            : ''
+                        }impact=${encodeURIComponent(s.impact_system)}`}
+                        class="card card-sm text-decoration-none text-reset"
+                        title="이 영향시스템 자산만 보기"
+                      >
+                        {inner}
+                      </a>
+                    ) : (
+                      <div class="card card-sm" title="영향시스템 미분류 — 재분류 필요">
+                        {inner}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -328,7 +551,7 @@ function CategoryGrid(props: { items: CategorySummary[]; activeGroup: string | n
           <div class="card-header py-2">
             <h3 class="card-title mb-0">
               <i class="ti ti-category me-1 text-azure"></i>
-              카테고리별 현황 {scopeLabel}
+              컴포넌트 카테고리별 현황 (컴포넌트 수) {scopeLabel}
             </h3>
             <div class="card-actions">
               <span class="text-muted small">총 {props.items.length}개 카테고리</span>
@@ -369,7 +592,13 @@ function CategoryGrid(props: { items: CategorySummary[]; activeGroup: string | n
   )
 }
 
-function GroupFilterBar(props: { groups: GroupSummary[]; activeGroup: string | null }) {
+// v3.6 admin 전용 그룹 전환 바 — POST /select-group/activate 로 활성 그룹을 영속 전환(쿠키 갱신).
+//   (단순 ?group= 링크는 쿠키와 어긋나 '전체'가 동작하지 않으므로 activate 폼으로 통일.)
+function GroupFilterBar(props: {
+  groups: GroupSummary[]
+  activeGroup: string | null
+  isAggregate: boolean
+}) {
   return (
     <div class="row row-cards mt-3">
       <div class="col-12">
@@ -378,29 +607,56 @@ function GroupFilterBar(props: { groups: GroupSummary[]; activeGroup: string | n
             <span class="text-muted me-2">
               <i class="ti ti-building me-1"></i>그룹사
             </span>
-            <a
-              href="/"
-              class={`btn btn-sm ${
-                props.activeGroup === null ? 'btn-primary' : 'btn-outline-secondary'
-              }`}
-            >
-              전체
-            </a>
+            <form method="post" action="/select-group/activate" class="d-inline">
+              <input type="hidden" name="group" value={ALL_GROUPS_SENTINEL} />
+              <input type="hidden" name="next" value="/" />
+              <button
+                type="submit"
+                class={`btn btn-sm ${props.isAggregate ? 'btn-primary' : 'btn-outline-secondary'}`}
+              >
+                전체
+              </button>
+            </form>
             {props.groups.map((g) => {
-              const active = props.activeGroup === g.name
+              const active = !props.isAggregate && props.activeGroup === g.name
               return (
-                <a
-                  href={`/?group=${encodeURIComponent(g.name)}`}
-                  class={`btn btn-sm ${active ? 'btn-primary' : 'btn-outline-secondary'}`}
-                >
-                  {g.name}
-                  <span class="badge bg-secondary text-white ms-2">{g.total}</span>
-                  {g.vulnerable > 0 ? (
-                    <span class="badge bg-red text-white ms-1">{g.vulnerable}</span>
-                  ) : null}
-                </a>
+                <form method="post" action="/select-group/activate" class="d-inline">
+                  <input type="hidden" name="group" value={g.name} />
+                  <input type="hidden" name="next" value="/" />
+                  <button
+                    type="submit"
+                    class={`btn btn-sm ${active ? 'btn-primary' : 'btn-outline-secondary'}`}
+                  >
+                    {g.name}
+                    <span class="badge bg-secondary text-white ms-2">{g.total}</span>
+                    {g.vulnerable > 0 ? (
+                      <span class="badge bg-red text-white ms-1">{g.vulnerable}</span>
+                    ) : null}
+                  </button>
+                </form>
               )
             })}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// v3.6 operator 전용 — 현재 스코프(본인 그룹)만 표시. 타그룹 전환 어포던스 없음(#2).
+function ScopeIndicator(props: { activeGroup: string | null }) {
+  return (
+    <div class="row row-cards mt-3">
+      <div class="col-12">
+        <div class="card">
+          <div class="card-body py-2 d-flex flex-wrap gap-2 align-items-center">
+            <span class="text-muted me-2">
+              <i class="ti ti-building me-1"></i>그룹사
+            </span>
+            <span class="badge bg-blue-lt">{props.activeGroup ?? '(미선택)'}</span>
+            <a href="/select-group" class="btn btn-sm btn-outline-secondary ms-auto">
+              <i class="ti ti-switch-horizontal me-1"></i>그룹사 변경
+            </a>
           </div>
         </div>
       </div>
@@ -656,10 +912,19 @@ function WidgetCard(props: {
     const g = typeof config.group_company === 'string' ? config.group_company : null
     const cat = typeof config.category === 'string' ? config.category : null
     const sev = typeof config.min_severity === 'string' ? config.min_severity : null
+    const imp = typeof config.impact_system === 'string' ? config.impact_system : null
     const params = new URLSearchParams()
     if (g) params.set('group', g)
     if (cat) params.set('category', cat)
-    // min_severity 는 추후 솔루션 필터에서 처리 가능. 현재는 group/category 만 라우팅.
+    if (sev) params.set('min_severity', sev)
+    if (imp) params.set('impact', imp)
+    const hasAny = !!(g || cat || sev || imp)
+    const summary = [
+      `그룹사: ${g ?? '전체'}`,
+      `카테고리: ${cat ? categoryDisplayName(cat) : '전체'}`,
+      `영향시스템: ${imp ? impactSystemLabel(imp) : '전체'}`,
+      `심각도: ${sev ? sev + ' 이상' : '전체'}`,
+    ].join(' · ')
     return (
       <div class="col-12 col-md-6 col-lg-4">
         <div class="card card-sm h-100">
@@ -672,10 +937,16 @@ function WidgetCard(props: {
             <div class="small text-muted mb-2">
               {g ? <span class="badge bg-purple-lt me-1">{g}</span> : null}
               {cat ? <span class="badge bg-blue-lt me-1">{categoryDisplayName(cat)}</span> : null}
-              {sev ? <span class="badge bg-orange-lt me-1">{sev}+</span> : null}
+              {imp ? <span class="badge bg-cyan-lt me-1">{impactSystemLabel(imp)}</span> : null}
+              {sev ? <span class="badge bg-orange-lt me-1">{sev} 이상</span> : null}
+              {!hasAny ? <span class="text-secondary">필터 조건 없음</span> : null}
             </div>
-            <a href={`/solutions?${params.toString()}`} class="btn btn-sm btn-outline-primary w-100">
-              <i class="ti ti-arrow-right me-1"></i>적용
+            <a
+              href={`/solutions?${params.toString()}`}
+              class="btn btn-sm btn-outline-primary w-100"
+              title={`이 필터를 적용한 솔루션 목록으로 이동 — ${summary}`}
+            >
+              <i class="ti ti-filter-search me-1"></i>이 필터로 목록 보기
             </a>
           </div>
         </div>
@@ -711,7 +982,7 @@ function WidgetCard(props: {
 function WidgetActions(props: { widget: DashboardWidget; editable: boolean }) {
   const w = props.widget
   return (
-    <div class="btn-list flex-nowrap">
+    <div class="btn-list flex-nowrap vm-widget-actions">
       <form method="post" action={`/dashboard/widgets/${w.id}/move/up`} class="d-inline">
         <button type="submit" class="btn btn-sm btn-icon" title="위로">
           <i class="ti ti-chevron-up"></i>
@@ -803,6 +1074,18 @@ function WidgetCreateModal(props: { groups: string[] }) {
                       <option value="low">Low</option>
                     </select>
                   </div>
+                  <div class="col-md-6">
+                    <label class="form-label">영향 시스템</label>
+                    <select id="filter-impact" class="form-select">
+                      <option value="">(전체)</option>
+                      {IMPACT_SYSTEM_OPTIONS.map((o) => (
+                        <option value={o.code}>{o.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div class="form-hint mt-1">
+                  최소 1개 조건을 채우면 "이 필터로 목록 보기"로 솔루션을 거른 화면으로 이동합니다.
                 </div>
               </div>
 
@@ -850,6 +1133,7 @@ function WidgetEditModal(props: { widget: DashboardWidget; groups: string[] }) {
   const prefillGroup = isFilter && typeof config.group_company === 'string' ? (config.group_company as string) : ''
   const prefillCat = isFilter && typeof config.category === 'string' ? (config.category as string) : ''
   const prefillSev = isFilter && typeof config.min_severity === 'string' ? (config.min_severity as string) : ''
+  const prefillImpact = isFilter && typeof config.impact_system === 'string' ? (config.impact_system as string) : ''
   const prefillContent = !isFilter && typeof config.content === 'string' ? (config.content as string) : ''
   const prefillColor = !isFilter && typeof config.color === 'string' ? (config.color as string) : 'blue'
   return (
@@ -895,6 +1179,17 @@ function WidgetEditModal(props: { widget: DashboardWidget; groups: string[] }) {
                       <option value="high" selected={prefillSev === 'high'}>High</option>
                       <option value="medium" selected={prefillSev === 'medium'}>Medium</option>
                       <option value="low" selected={prefillSev === 'low'}>Low</option>
+                    </select>
+                  </div>
+                  <div class="col-md-6">
+                    <label class="form-label">영향 시스템</label>
+                    <select class="form-select widget-edit-impact">
+                      <option value="" selected={prefillImpact === ''}>(전체)</option>
+                      {IMPACT_SYSTEM_OPTIONS.map((o) => (
+                        <option value={o.code} selected={o.code === prefillImpact}>
+                          {o.label}
+                        </option>
+                      ))}
                     </select>
                   </div>
                 </div>

@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { ApiResponse, Bindings, MatchInput, MatchedVuln } from '../types'
 import { writeAudit } from '../lib/audit'
+import { canReadRowGroup, requireSystemOrAdmin } from '../middleware/permissions'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -70,6 +71,10 @@ function validateMatchPayload(body: unknown): ValidationResult<MatchPayload> {
 }
 
 app.post('/match', async (c) => {
+  // v3.6 대량 매칭 업로드는 전 그룹 교차 쓰기 → system(n8n)/admin 만 허용(operator 차단).
+  const perm = requireSystemOrAdmin(c)
+  if (!perm.ok) return c.json({ success: false, error: perm.error }, perm.status)
+
   const body = await c.req.json().catch(() => null)
   const validated = validateMatchPayload(body)
   if (!validated.ok) {
@@ -187,6 +192,10 @@ app.post('/match', async (c) => {
 })
 
 app.post('/clear', async (c) => {
+  // v3.6 전역 취약 플래그 초기화는 파괴적 교차 그룹 변경 → system/admin 만 허용(operator 차단).
+  const perm = requireSystemOrAdmin(c)
+  if (!perm.ok) return c.json({ success: false, error: perm.error }, perm.status)
+
   const db = c.env.DB
   const res = await db
     .prepare(
@@ -213,6 +222,15 @@ app.get('/history/:id', async (c) => {
   const id = Number(raw)
   if (!Number.isInteger(id) || id < 1) {
     return c.json({ success: false, error: 'Invalid id' }, 400)
+  }
+
+  // v3.6 IDOR 가드 — 솔루션의 그룹사를 먼저 조회해 권한 검증(타그룹은 404).
+  const sol = await c.env.DB
+    .prepare('SELECT group_company FROM solutions WHERE id = ?')
+    .bind(id)
+    .first<{ group_company: string | null }>()
+  if (!sol || !canReadRowGroup(c, sol.group_company)) {
+    return c.json({ success: false, error: 'Solution not found' }, 404)
   }
 
   const { results } = await c.env.DB

@@ -1,8 +1,9 @@
 import { Layout } from './layout'
 import { raw } from 'hono/html'
-import type { AssetWithComponents, MatchedVuln, Solution } from '../types'
+import type { AssetWithComponents, MatchedVuln, Solution, ImpactSystem } from '../types'
 import type { GroupSummary } from './dashboard'
 import { CATEGORY_METADATA, categoryDisplayName, CATEGORY_KEYS } from './category-metadata'
+import { IMPACT_SYSTEM_OPTIONS, impactSystemLabel } from './impact-system-metadata'
 
 export interface FlashMessage {
   type: 'success' | 'error'
@@ -34,6 +35,11 @@ export interface SolutionsListProps {
   groupSummaries: GroupSummary[]
   activeGroup: string | null
   activeCategory: string | null
+  // v3.5 추가 필터 상태
+  activeImpact: ImpactSystem | null
+  activeMinSeverity: string | null
+  activeVulnStatus: string | null
+  activeQ: string | null
   flash?: FlashMessage
   // v3.0 — 운영자 세션 컨텍스트
   currentUser?: {
@@ -48,6 +54,41 @@ const DB_ENGINES = ['MySQL', 'MariaDB', 'PostgreSQL', 'Oracle', 'MSSQL', 'MongoD
 const WEB_ENGINES = ['Apache', 'Nginx', 'IIS', 'Tengine', 'Caddy', 'LiteSpeed']
 const WAS_ENGINES = ['Tomcat', 'JBoss', 'WildFly', 'WebLogic', 'WebSphere', 'JEUS']
 
+// v3.5 솔루션 목록 활성 필터 상태 (URL 직렬화 단일 소스)
+interface SolutionFilters {
+  group: string | null
+  category: string | null
+  impact: ImpactSystem | null
+  minSeverity: string | null
+  vulnStatus: string | null
+  q: string | null
+  view: SolutionsView
+}
+
+// 활성 필터를 /solutions 쿼리 URL 로 직렬화. overrides 로 특정 키를 교체(null=제거).
+function buildSolutionsQuery(
+  f: SolutionFilters,
+  overrides: Record<string, string | null> = {},
+): string {
+  const params = new URLSearchParams()
+  const set = (k: string, v: string | null) => {
+    if (v) params.set(k, v)
+  }
+  set('group', f.group)
+  set('category', f.category)
+  set('impact', f.impact)
+  set('min_severity', f.minSeverity)
+  set('vuln_status', f.vulnStatus)
+  set('q', f.q)
+  if (f.view === 'list') params.set('view', 'list')
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v === null) params.delete(k)
+    else params.set(k, v)
+  }
+  const s = params.toString()
+  return s ? `/solutions?${s}` : '/solutions'
+}
+
 export function SolutionsList(props: SolutionsListProps) {
   const isAdmin = props.currentUser?.role === 'admin' || props.currentUser?.role === 'system'
   const scopeLabel = [props.activeGroup, props.activeCategory ? categoryDisplayName(props.activeCategory) : null]
@@ -60,8 +101,23 @@ export function SolutionsList(props: SolutionsListProps) {
       ? `자산 ${props.assets.length}건`
       : `솔루션 ${props.solutions.length}건`
 
+  const filters: SolutionFilters = {
+    group: props.activeGroup,
+    category: props.activeCategory,
+    impact: props.activeImpact,
+    minSeverity: props.activeMinSeverity,
+    vulnStatus: props.activeVulnStatus,
+    q: props.activeQ,
+    view: props.view,
+  }
+
   return (
-    <Layout title="솔루션 관리" currentPath="/solutions" currentUser={props.currentUser}>
+    <Layout
+      title="솔루션 관리"
+      currentPath="/solutions"
+      currentUser={props.currentUser}
+      activeGroup={props.activeGroup}
+    >
       <div class="page-header d-print-none">
         <div class="container-xl">
           <div class="row g-2 align-items-center">
@@ -73,11 +129,7 @@ export function SolutionsList(props: SolutionsListProps) {
             </div>
             <div class="col-auto ms-auto d-print-none">
               <div class="btn-list">
-                <ViewToggle
-                  view={props.view}
-                  activeGroup={props.activeGroup}
-                  activeCategory={props.activeCategory}
-                />
+                <ViewToggle filters={filters} />
                 <button
                   type="button"
                   class="btn btn-outline-primary d-inline-flex align-items-center"
@@ -95,6 +147,15 @@ export function SolutionsList(props: SolutionsListProps) {
                 >
                   <i class="ti ti-server-2 me-1"></i>장비 등록
                 </button>
+                <form method="post" action="/solutions/assets/recompute" class="d-inline">
+                  <button
+                    type="submit"
+                    class="btn btn-outline-secondary d-inline-flex align-items-center"
+                    title="구성요소 기반으로 자산 영향시스템을 일괄 재분류합니다 (수동 확정 자산은 보존)"
+                  >
+                    <i class="ti ti-refresh me-1"></i>영향시스템 재분류
+                  </button>
+                </form>
               </div>
             </div>
           </div>
@@ -111,19 +172,14 @@ export function SolutionsList(props: SolutionsListProps) {
           ) : null}
 
           {props.groupSummaries.length > 0 ? (
-            <GroupFilterBar
-              groups={props.groupSummaries}
-              activeGroup={props.activeGroup}
-              activeCategory={props.activeCategory}
-            />
+            <GroupFilterBar groups={props.groupSummaries} filters={filters} />
           ) : null}
 
-          {props.activeCategory ? (
-            <CategoryActiveBanner
-              activeCategory={props.activeCategory}
-              activeGroup={props.activeGroup}
-            />
-          ) : null}
+          {/* v3.5 솔루션 필터바 (카테고리/영향시스템/심각도/상태/검색) */}
+          <SolutionFilterBar filters={filters} />
+
+          {props.activeCategory ? <CategoryActiveBanner filters={filters} /> : null}
+          {props.activeImpact ? <ImpactActiveBanner filters={filters} /> : null}
 
           {/* grouped(기본) 뷰 = 부모 자산 카드 목록 */}
           {props.view === 'grouped' ? (
@@ -137,38 +193,40 @@ export function SolutionsList(props: SolutionsListProps) {
             <div class="card">
               <div class="card-body p-0">
                 <div class="table-responsive">
-                  <table class="table table-vcenter table-hover mb-0 vm-table">
-                    {/* 고정폭 — 카테고리(12rem)는 긴 한글 라벨 수용, 나머지도 겹침 방지 폭 확보 */}
+                  <table id="flat-table" class="table table-vcenter table-hover mb-0 vm-table">
+                    {/* 고정폭 — 카테고리(11rem)는 긴 한글 라벨 수용, 나머지도 겹침 방지 폭 확보 */}
                     <colgroup>
                       <col style="width:2.5rem"/>
-                      <col style="width:9rem"/>
+                      <col style="width:8rem"/>
                       <col style="width:8rem"/>
                       <col style="width:9rem"/>
-                      <col style="width:12rem"/>
+                      <col style="width:11rem"/>
+                      <col style="width:6.5rem"/>
+                      <col style="width:7rem"/>
                       <col style="width:7.5rem"/>
                       <col style="width:7rem"/>
-                      <col style="width:8rem"/>
                       <col style="width:7rem"/>
-                      <col style="width:8rem"/>
+                      <col style="width:7rem"/>
                     </colgroup>
                     <thead>
                       <tr>
                         <th></th>
-                        <th>상태</th>
-                        <th>벤더</th>
-                        <th>제품</th>
-                        <th>카테고리</th>
+                        <th class="vm-th-sort" data-sort="status">상태<span class="vm-sort-ind"></span></th>
+                        <th class="vm-th-sort" data-sort="vendor">벤더<span class="vm-sort-ind"></span></th>
+                        <th class="vm-th-sort" data-sort="product">제품<span class="vm-sort-ind"></span></th>
+                        <th class="vm-th-sort" data-sort="category">카테고리<span class="vm-sort-ind"></span></th>
                         <th>버전</th>
-                        <th>그룹사</th>
+                        <th class="vm-th-sort" data-sort="group">그룹사<span class="vm-sort-ind"></span></th>
                         <th>호스트명</th>
-                        <th>담당</th>
+                        <th class="vm-th-sort" data-sort="owner">부서<span class="vm-sort-ind"></span></th>
+                        <th class="vm-th-sort" data-sort="manager">담당자<span class="vm-sort-ind"></span></th>
                         <th class="w-1"></th>
                       </tr>
                     </thead>
                     <tbody>
                       {props.solutions.length === 0 ? (
                         <tr>
-                          <td colspan={10}>
+                          <td colspan={11}>
                             <div class="empty">
                               <p class="empty-title">등록된 솔루션이 없습니다</p>
                               <p class="empty-subtitle text-muted">
@@ -206,6 +264,7 @@ export function SolutionsList(props: SolutionsListProps) {
         groupSuggestions={props.groupSummaries.map((g) => g.name)}
         userGroups={props.currentUser?.groups ?? []}
         isAdmin={isAdmin}
+        activeGroup={props.activeGroup}
       />
       <BulkUploadModal />
       {/* 부모 자산 수정 모달 */}
@@ -216,6 +275,7 @@ export function SolutionsList(props: SolutionsListProps) {
       />
       {/* 수동 취약 표시 모달 */}
       <VulnMarkModal />
+      <VulnResolveModal />
 
       {raw(`<script>
 var CATEGORY_METADATA = ${JSON.stringify(CATEGORY_METADATA)};
@@ -235,6 +295,44 @@ document.addEventListener('DOMContentLoaded', function() {
       }
     });
   });
+
+  // === 평면(list) 뷰 컬럼 정렬 (클라이언트) ===
+  (function initFlatSort() {
+    var table = document.getElementById('flat-table');
+    if (!table) return;
+    var tbody = table.querySelector('tbody');
+    if (!tbody) return;
+    var ths = table.querySelectorAll('th.vm-th-sort');
+    var sortState = { key: null, dir: 1 };
+    ths.forEach(function(th) {
+      th.addEventListener('click', function() {
+        var key = th.getAttribute('data-sort');
+        if (sortState.key === key) { sortState.dir = -sortState.dir; }
+        else { sortState.key = key; sortState.dir = 1; }
+        ths.forEach(function(h) {
+          var i = h.querySelector('.vm-sort-ind');
+          if (i) i.textContent = '';
+          h.classList.remove('is-sorted');
+        });
+        var ind = th.querySelector('.vm-sort-ind');
+        if (ind) ind.textContent = sortState.dir > 0 ? ' ↑' : ' ↓';
+        th.classList.add('is-sorted');
+        var rows = Array.prototype.slice.call(tbody.querySelectorAll('tr[data-row="main"]'));
+        rows.sort(function(a, b) {
+          var va = a.getAttribute('data-' + key) || '';
+          var vb = b.getAttribute('data-' + key) || '';
+          if (va < vb) return -sortState.dir;
+          if (va > vb) return sortState.dir;
+          return 0;
+        });
+        rows.forEach(function(r) {
+          tbody.appendChild(r);
+          var det = document.getElementById('solcves-' + r.getAttribute('data-id'));
+          if (det) tbody.appendChild(det);
+        });
+      });
+    });
+  })();
 
   // === 카테고리 변경 시 current_version 라벨/placeholder 동적 갱신 ===
   function updateVersionLabel(category) {
@@ -272,7 +370,7 @@ document.addEventListener('DOMContentLoaded', function() {
         form.action = '/solutions/' + id;
         title.textContent = '솔루션 수정';
         submitBtn.textContent = '수정 저장';
-        ['vendor','product','category','current_version','hostname','owner','notes','group_company','cpe_part','cpe_version_range','aliases','cpe_uri'].forEach(function(k) {
+        ['vendor','product','category','current_version','hostname','owner','manager','notes','group_company','cpe_part','cpe_version_range','aliases','cpe_uri'].forEach(function(k) {
           var attrName = 'data-' + k.replace(/_/g, '-');
           var value = btn.getAttribute(attrName) || '';
           var el = form.elements[k];
@@ -323,7 +421,22 @@ document.addEventListener('DOMContentLoaded', function() {
           var li = document.createElement('button');
           li.type = 'button';
           li.className = 'list-group-item list-group-item-action py-1' + (it.deprecated ? ' text-muted' : '');
-          li.innerHTML = '<code class="me-1">' + it.cpe_part + '</code><small>' + (it.title || (it.vendor + ' / ' + it.product)) + (it.deprecated ? ' <span class=\"badge bg-yellow-lt ms-1\">deprecated</span>' : '') + '</small>';
+          // v3.6 XSS 방어 — NVD 유래 데이터(cpe_part/title/vendor/product)를 innerHTML 대신
+          //   textContent 로 삽입(마크업 비활성화). 외부 출처 데이터를 신뢰하지 않는다.
+          var code = document.createElement('code');
+          code.className = 'me-1';
+          code.textContent = it.cpe_part || '';
+          var small = document.createElement('small');
+          small.textContent = it.title || ((it.vendor || '') + ' / ' + (it.product || ''));
+          li.appendChild(code);
+          li.appendChild(small);
+          if (it.deprecated) {
+            var badge = document.createElement('span');
+            badge.className = 'badge bg-yellow-lt ms-1';
+            badge.textContent = 'deprecated';
+            small.appendChild(document.createTextNode(' '));
+            small.appendChild(badge);
+          }
           li.addEventListener('click', function() {
             form.elements['cpe_part'].value = it.cpe_part;
             if (status) status.textContent = '선택됨: ' + it.cpe_part;
@@ -356,8 +469,8 @@ document.addEventListener('DOMContentLoaded', function() {
       if (!form) return;
       var id = btn.getAttribute('data-asset-id') || '';
       form.action = '/solutions/asset/' + id;
-      // 각 필드 채움
-      var fields = ['name','vendor','hostname','group_company','owner','notes'];
+      // 각 필드 채움 (impact_system 포함 — select 도 .value 설정으로 동작)
+      var fields = ['name','vendor','hostname','group_company','owner','manager','notes','impact_system'];
       fields.forEach(function(k) {
         var attrName = 'data-' + k.replace(/_/g, '-');
         var value = btn.getAttribute(attrName) || '';
@@ -382,6 +495,24 @@ document.addEventListener('DOMContentLoaded', function() {
       var vendor = btn.getAttribute('data-vendor') || '';
       var product = btn.getAttribute('data-product') || '';
       var targetEl = document.getElementById('vuln-mark-target');
+      if (targetEl) targetEl.textContent = vendor + ' / ' + product;
+    });
+  }
+
+  // === 조치완료 모달 채움 (#vuln-resolve-modal) ===
+  var vulnResolveModal = document.getElementById('vuln-resolve-modal');
+  if (vulnResolveModal) {
+    vulnResolveModal.addEventListener('show.bs.modal', function(event) {
+      var btn = event.relatedTarget;
+      if (!btn) return;
+      var form = document.getElementById('vuln-resolve-form');
+      if (!form) return;
+      var id = btn.getAttribute('data-id') || '0';
+      form.action = '/solutions/' + id + '/vuln-status';
+      form.reset();
+      var vendor = btn.getAttribute('data-vendor') || '';
+      var product = btn.getAttribute('data-product') || '';
+      var targetEl = document.getElementById('vuln-resolve-target');
       if (targetEl) targetEl.textContent = vendor + ' / ' + product;
     });
   }
@@ -461,15 +592,14 @@ document.addEventListener('DOMContentLoaded', function() {
        'asset-db-engine','asset-db-version',
        'asset-web-engine','asset-web-version',
        'asset-was-engine','asset-was-version',
-       'asset-group','asset-owner'].forEach(function(id) { setAssetVal(id, ''); });
+       'asset-owner','asset-manager'].forEach(function(id) { setAssetVal(id, ''); });
       if (extraBody) extraBody.innerHTML = '';
       var statusBox = document.getElementById('asset-status');
       if (statusBox) statusBox.innerHTML = '';
       if (btn) {
+        // v3.6 그룹사는 활성 그룹사로 서버가 자동 결정 — prefill 불필요(hostname 만 유지).
         var preHost = btn.getAttribute('data-prefill-hostname');
-        var preGroup = btn.getAttribute('data-prefill-group');
         if (preHost) setAssetVal('asset-hostname', preHost);
-        if (preGroup) setAssetVal('asset-group', preGroup);
       }
     });
   }
@@ -536,8 +666,9 @@ document.addEventListener('DOMContentLoaded', function() {
         was_engine: wasEng || null,
         was_version: wasVer || null,
         extra_components: extraCollected.items.length > 0 ? extraCollected.items : null,
-        group_company: getAssetVal('asset-group') || null,
+        group_company: null, // v3.6 서버(resolveWriteGroup)가 활성 그룹사로 강제 결정 — 클라이언트 값 미신뢰
         owner: getAssetVal('asset-owner') || null,
+        manager: getAssetVal('asset-manager') || null,
       };
 
       submitBtn.disabled = true;
@@ -645,41 +776,116 @@ document.addEventListener('DOMContentLoaded', function() {
 // ============================================================
 // ViewToggle — [솔루션별(기본)] [개별(평면)]
 // ============================================================
-function ViewToggle(props: {
-  view: SolutionsView
-  activeGroup: string | null
-  activeCategory: string | null
-}) {
-  const params = new URLSearchParams()
-  if (props.activeGroup) params.set('group', props.activeGroup)
-  if (props.activeCategory) params.set('category', props.activeCategory)
-  const baseQs = params.toString()
-
-  // 기본(grouped): view 파라미터 없음 = /solutions (또는 group/category만)
-  const groupedHref = `/solutions${baseQs ? `?${baseQs}` : ''}`
-
-  // 평면(list): view=list 추가
-  const listParams = new URLSearchParams(params)
-  listParams.set('view', 'list')
-  const listHref = `/solutions?${listParams.toString()}`
-
+function ViewToggle(props: { filters: SolutionFilters }) {
+  // 모든 활성 필터를 보존하며 view 만 교체
+  const groupedHref = buildSolutionsQuery({ ...props.filters, view: 'grouped' })
+  const listHref = buildSolutionsQuery({ ...props.filters, view: 'list' })
+  const isList = props.filters.view === 'list'
   return (
     <div class="btn-group" role="group" aria-label="뷰 전환">
       <a
         href={groupedHref}
-        class={`btn btn-sm ${props.view === 'grouped' ? 'btn-primary' : 'btn-outline-secondary'}`}
+        class={`btn btn-sm ${!isList ? 'btn-primary' : 'btn-outline-secondary'}`}
         title="부모 솔루션(자산) 카드 단위 보기 — 기본"
       >
         <i class="ti ti-layout-cards me-1"></i>솔루션별(기본)
       </a>
       <a
         href={listHref}
-        class={`btn btn-sm ${props.view === 'list' ? 'btn-primary' : 'btn-outline-secondary'}`}
+        class={`btn btn-sm ${isList ? 'btn-primary' : 'btn-outline-secondary'}`}
         title="개별 구성요소 행 단위 보기 — 평면"
       >
         <i class="ti ti-list me-1"></i>개별(평면)
       </a>
     </div>
+  )
+}
+
+// ============================================================
+// 솔루션 필터바 (카테고리/영향시스템/심각도/상태/검색) — GET 폼
+// ============================================================
+function SolutionFilterBar(props: { filters: SolutionFilters }) {
+  const f = props.filters
+  const hasActive = !!(f.category || f.impact || f.minSeverity || f.vulnStatus || f.q)
+  return (
+    <form method="get" action="/solutions" class="card mb-3">
+      <div class="card-body py-2">
+        <div class="row g-2 align-items-end">
+          <div class="col-6 col-md">
+            <label class="form-label small mb-1 text-muted">카테고리</label>
+            <select name="category" class="form-select form-select-sm">
+              <option value="">전체</option>
+              {CATEGORY_KEYS.map((k) => (
+                <option value={k} selected={k === f.category}>
+                  {CATEGORY_METADATA[k].displayName}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div class="col-6 col-md">
+            <label class="form-label small mb-1 text-muted">영향 시스템</label>
+            <select name="impact" class="form-select form-select-sm">
+              <option value="">전체</option>
+              {IMPACT_SYSTEM_OPTIONS.map((o) => (
+                <option value={o.code} selected={o.code === f.impact}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div class="col-6 col-md">
+            <label class="form-label small mb-1 text-muted">최소 심각도</label>
+            <select name="min_severity" class="form-select form-select-sm">
+              <option value="">전체</option>
+              <option value="critical" selected={f.minSeverity === 'critical'}>Critical</option>
+              <option value="high" selected={f.minSeverity === 'high'}>High 이상</option>
+              <option value="medium" selected={f.minSeverity === 'medium'}>Medium 이상</option>
+              <option value="low" selected={f.minSeverity === 'low'}>Low 이상</option>
+            </select>
+          </div>
+          <div class="col-6 col-md">
+            <label class="form-label small mb-1 text-muted">상태</label>
+            <select name="vuln_status" class="form-select form-select-sm">
+              <option value="">전체</option>
+              <option value="vulnerable" selected={f.vulnStatus === 'vulnerable'}>취약만</option>
+              <option value="safe" selected={f.vulnStatus === 'safe'}>정상만</option>
+            </select>
+          </div>
+          <div class="col-12 col-md-3">
+            <label class="form-label small mb-1 text-muted">검색</label>
+            <input
+              type="search"
+              name="q"
+              class="form-control form-control-sm"
+              placeholder="벤더 · 제품 · 호스트명"
+              value={f.q ?? ''}
+            />
+          </div>
+          {f.group ? <input type="hidden" name="group" value={f.group} /> : null}
+          {f.view === 'list' ? <input type="hidden" name="view" value="list" /> : null}
+          <div class="col-12 col-md-auto d-flex gap-2">
+            <button type="submit" class="btn btn-sm btn-primary">
+              <i class="ti ti-filter me-1"></i>필터 적용
+            </button>
+            {hasActive ? (
+              <a
+                href={buildSolutionsQuery({
+                  ...f,
+                  category: null,
+                  impact: null,
+                  minSeverity: null,
+                  vulnStatus: null,
+                  q: null,
+                })}
+                class="btn btn-sm btn-link"
+              >
+                초기화
+              </a>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </form>
   )
 }
 
@@ -752,7 +958,7 @@ function ParentAssetCard(props: {
     <div class="col-12">
       <div class={`card vm-card${hasVulnerable ? ' is-vuln' : ''}`}>
         {/* 카드 헤더 — 자산 메타 + 상태 롤업 */}
-        <div class="card-header py-2 vm-card__head">
+        <div class="card-header py-3 vm-card__head">
           <div class="d-flex align-items-start flex-wrap gap-2 flex-grow-1">
             {/* 상태 롤업 */}
             <div class="me-2 flex-shrink-0">
@@ -776,6 +982,22 @@ function ParentAssetCard(props: {
                 <strong>{asset.name}</strong>
               </h3>
               <div class="d-flex flex-wrap gap-2 align-items-center small text-muted">
+                {asset.impact_system ? (
+                  <span
+                    class="badge bg-azure-lt"
+                    title={`영향 시스템${asset.impact_system_source === 'manual' ? ' (수동 확정)' : ' (자동 분류)'}`}
+                  >
+                    <i class="ti ti-affiliate me-1"></i>
+                    {impactSystemLabel(asset.impact_system)}
+                    {asset.impact_system_source === 'manual' ? (
+                      <i class="ti ti-lock ms-1" style="font-size:0.8em"></i>
+                    ) : null}
+                  </span>
+                ) : (
+                  <span class="badge bg-secondary-lt" title="영향 시스템 미분류">
+                    <i class="ti ti-help me-1"></i>미분류
+                  </span>
+                )}
                 {asset.group_company ? (
                   <span class="badge bg-purple-lt">
                     <i class="ti ti-building me-1"></i>{asset.group_company}
@@ -787,8 +1009,13 @@ function ParentAssetCard(props: {
                   </span>
                 ) : null}
                 {asset.owner ? (
-                  <span>
-                    <i class="ti ti-user me-1"></i>{asset.owner}
+                  <span title="부서">
+                    <i class="ti ti-users-group me-1"></i>{asset.owner}
+                  </span>
+                ) : null}
+                {asset.manager ? (
+                  <span title="담당자">
+                    <i class="ti ti-user me-1"></i>{asset.manager}
                   </span>
                 ) : null}
                 <span class="badge bg-secondary-lt">
@@ -801,8 +1028,8 @@ function ParentAssetCard(props: {
             </div>
           </div>
 
-          {/* 카드 액션 버튼들 */}
-          <div class="card-actions d-flex flex-wrap gap-1 flex-shrink-0">
+          {/* 카드 액션 버튼들 — 헤더가 2줄로 길어도 상단에 붙지 않도록 세로 중앙 정렬 */}
+          <div class="card-actions d-flex flex-wrap gap-1 flex-shrink-0 align-self-center">
             {/* 구성요소 추가 — 기존 #asset-modal 재활용, hostname/group prefill */}
             <button
               type="button"
@@ -828,7 +1055,9 @@ function ParentAssetCard(props: {
               data-hostname={asset.hostname ?? ''}
               data-group-company={asset.group_company ?? ''}
               data-owner={asset.owner ?? ''}
+              data-manager={asset.manager ?? ''}
               data-notes={asset.notes ?? ''}
+              data-impact-system={asset.impact_system ?? ''}
               title="자산 정보 수정"
             >
               <i class="ti ti-edit me-1"></i>수정
@@ -973,6 +1202,7 @@ function AssetComponentRow(props: { solution: Solution; matches: MatchedVuln[] }
               data-current-version={s.current_version}
               data-hostname={s.hostname ?? ''}
               data-owner={s.owner ?? ''}
+              data-manager={s.manager ?? ''}
               data-notes={s.notes ?? ''}
               data-group-company={s.group_company ?? ''}
               data-cpe-part={s.cpe_part ?? ''}
@@ -1146,14 +1376,37 @@ function AssetEditModal(props: { groupSuggestions: string[]; userGroups: string[
                     ))}
                   </datalist>
                 </div>
-                <div class="col-md-6">
-                  <label class="form-label">담당</label>
+                <div class="col-md-3">
+                  <label class="form-label">부서</label>
                   <input
                     type="text"
                     name="owner"
                     class="form-control"
                     placeholder="예: 인프라팀 / 보안팀"
                   />
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label">담당자</label>
+                  <input
+                    type="text"
+                    name="manager"
+                    class="form-control"
+                    placeholder="예: 홍길동"
+                  />
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label">영향 시스템</label>
+                  <select name="impact_system" class="form-select">
+                    <option value="">자동 분류 (구성요소 기반)</option>
+                    {IMPACT_SYSTEM_OPTIONS.map((o) => (
+                      <option value={o.code}>
+                        {o.label} — {o.description}
+                      </option>
+                    ))}
+                  </select>
+                  <small class="form-hint">
+                    직접 선택하면 <strong>수동 확정</strong>되어 자동 재분류가 덮어쓰지 않습니다.
+                  </small>
                 </div>
                 <div class="col-12">
                   <label class="form-label">비고</label>
@@ -1179,14 +1432,8 @@ function AssetEditModal(props: { groupSuggestions: string[]; userGroups: string[
 // ============================================================
 // 그룹 필터 바
 // ============================================================
-function GroupFilterBar(props: {
-  groups: GroupSummary[]
-  activeGroup: string | null
-  activeCategory: string | null
-}) {
-  const catSuffix = props.activeCategory
-    ? `&category=${encodeURIComponent(props.activeCategory)}`
-    : ''
+function GroupFilterBar(props: { groups: GroupSummary[]; filters: SolutionFilters }) {
+  const f = props.filters
   return (
     <div class="card mb-3">
       <div class="card-body py-2 d-flex flex-wrap gap-2 align-items-center">
@@ -1194,16 +1441,16 @@ function GroupFilterBar(props: {
           <i class="ti ti-building me-1"></i>그룹사
         </span>
         <a
-          href={`/solutions${props.activeCategory ? `?category=${encodeURIComponent(props.activeCategory)}` : ''}`}
-          class={`btn btn-sm ${props.activeGroup === null ? 'btn-primary' : 'btn-outline-secondary'}`}
+          href={buildSolutionsQuery(f, { group: null })}
+          class={`btn btn-sm ${f.group === null ? 'btn-primary' : 'btn-outline-secondary'}`}
         >
           전체
         </a>
         {props.groups.map((g) => {
-          const active = props.activeGroup === g.name
+          const active = f.group === g.name
           return (
             <a
-              href={`/solutions?group=${encodeURIComponent(g.name)}${catSuffix}`}
+              href={buildSolutionsQuery(f, { group: g.name })}
               class={`btn btn-sm ${active ? 'btn-primary' : 'btn-outline-secondary'}`}
             >
               {g.name}
@@ -1220,19 +1467,32 @@ function GroupFilterBar(props: {
 }
 
 // ============================================================
-// 카테고리 활성 배너
+// 카테고리 / 영향시스템 활성 배너
 // ============================================================
-function CategoryActiveBanner(props: { activeCategory: string; activeGroup: string | null }) {
-  const clearHref = props.activeGroup
-    ? `/solutions?group=${encodeURIComponent(props.activeGroup)}`
-    : '/solutions'
+function CategoryActiveBanner(props: { filters: SolutionFilters }) {
+  const f = props.filters
   return (
     <div class="alert alert-info mb-3 d-flex align-items-center">
       <i class="ti ti-filter me-2"></i>
       <div class="flex-grow-1">
-        카테고리 <strong>{categoryDisplayName(props.activeCategory)}</strong> 만 표시 중
+        카테고리 <strong>{categoryDisplayName(f.category ?? '')}</strong> 만 표시 중
       </div>
-      <a href={clearHref} class="btn btn-sm btn-outline-secondary">
+      <a href={buildSolutionsQuery(f, { category: null })} class="btn btn-sm btn-outline-secondary">
+        <i class="ti ti-x me-1"></i>해제
+      </a>
+    </div>
+  )
+}
+
+function ImpactActiveBanner(props: { filters: SolutionFilters }) {
+  const f = props.filters
+  return (
+    <div class="alert alert-info mb-3 d-flex align-items-center">
+      <i class="ti ti-affiliate me-2"></i>
+      <div class="flex-grow-1">
+        영향 시스템 <strong>{impactSystemLabel(f.impact)}</strong> 만 표시 중
+      </div>
+      <a href={buildSolutionsQuery(f, { impact: null })} class="btn btn-sm btn-outline-secondary">
         <i class="ti ti-x me-1"></i>해제
       </a>
     </div>
@@ -1260,9 +1520,29 @@ function SolutionRow(props: { solution: Solution; matches: MatchedVuln[] }) {
     ? 'bg-red-lt'
     : ''
 
+  const statusKey =
+    s.is_vulnerable === 1
+      ? '0'
+      : s.manual_status === 'vulnerable'
+      ? '1'
+      : s.manual_status === 'resolved'
+      ? '2'
+      : '3'
+
   return (
     <>
-      <tr class={rowClass}>
+      <tr
+        class={rowClass}
+        data-row="main"
+        data-id={String(s.id)}
+        data-status={statusKey}
+        data-vendor={(s.vendor ?? '').toLowerCase()}
+        data-product={(s.product ?? '').toLowerCase()}
+        data-category={categoryDisplayName(s.category).toLowerCase()}
+        data-group={(s.group_company ?? '').toLowerCase()}
+        data-owner={(s.owner ?? '').toLowerCase()}
+        data-manager={(s.manager ?? '').toLowerCase()}
+      >
         <td>
           {showToggle ? (
             <button
@@ -1302,6 +1582,7 @@ function SolutionRow(props: { solution: Solution; matches: MatchedVuln[] }) {
         </td>
         <td class="text-muted">{s.hostname ?? '—'}</td>
         <td class="text-muted">{s.owner ?? '—'}</td>
+        <td class="text-muted">{s.manager ?? '—'}</td>
         <td class="text-end">
           <div class="btn-list flex-nowrap">
             <button
@@ -1317,6 +1598,7 @@ function SolutionRow(props: { solution: Solution; matches: MatchedVuln[] }) {
               data-current-version={s.current_version}
               data-hostname={s.hostname ?? ''}
               data-owner={s.owner ?? ''}
+              data-manager={s.manager ?? ''}
               data-notes={s.notes ?? ''}
               data-group-company={s.group_company ?? ''}
               data-cpe-part={s.cpe_part ?? ''}
@@ -1345,8 +1627,8 @@ function SolutionRow(props: { solution: Solution; matches: MatchedVuln[] }) {
         </td>
       </tr>
       {showToggle ? (
-        <tr id={`solcves-${s.id}`} class="d-none">
-          <td colspan={10} class={s.is_vulnerable === 1 || s.manual_status === 'vulnerable' ? 'bg-red-lt' : 'bg-light'}>
+        <tr id={`solcves-${s.id}`} data-row="detail" class="d-none">
+          <td colspan={11} class={s.is_vulnerable === 1 || s.manual_status === 'vulnerable' ? 'bg-red-lt' : 'bg-light'}>
             <div class="p-2">
               {hasAttrs ? <AttrCard category={s.category} attrs={parsedAttrs!} /> : null}
               {cveCount > 0 ? (
@@ -1497,19 +1779,19 @@ function VulnStatusDropdown(props: { solution: Solution; needsAction: boolean })
         >
           <i class="ti ti-flag me-2"></i>수동 취약 표시
         </button>
-        {/* 조치완료 — 취약하거나 수동 상태가 있을 때 */}
+        {/* 조치완료 — 취약하거나 수동 상태가 있을 때. 방식(수동/업데이트) 선택 모달로 진입. */}
         {props.needsAction ? (
-          <form
-            method="post"
-            action={`/solutions/${s.id}/vuln-status`}
-            class="d-block"
-            onsubmit={`return confirm('${confirmResolveMsg.replace(/'/g, "\\'")}');`}
+          <button
+            type="button"
+            class="dropdown-item text-teal"
+            data-bs-toggle="modal"
+            data-bs-target="#vuln-resolve-modal"
+            data-id={String(s.id)}
+            data-vendor={s.vendor}
+            data-product={s.product}
           >
-            <input type="hidden" name="action" value="resolved" />
-            <button type="submit" class="dropdown-item text-teal">
-              <i class="ti ti-circle-check me-2"></i>조치완료(해결)
-            </button>
-          </form>
+            <i class="ti ti-circle-check me-2"></i>조치완료(해결)
+          </button>
         ) : null}
         {/* 자동복귀 — 수동 상태가 있을 때만 */}
         {hasManual ? (
@@ -1615,6 +1897,69 @@ function VulnMarkModal() {
 }
 
 // ============================================================
+// 조치완료 모달 (#vuln-resolve-modal) — 방식(수동/업데이트) 선택 + 메모
+// ============================================================
+function VulnResolveModal() {
+  return (
+    <div
+      class="modal modal-blur fade"
+      id="vuln-resolve-modal"
+      tabindex={-1}
+      role="dialog"
+      aria-hidden="true"
+    >
+      <div class="modal-dialog modal-dialog-centered" role="document">
+        <div class="modal-content">
+          <div class="modal-header" style="background:var(--vm-resolved-bg)">
+            <h5 class="modal-title" style="color:var(--vm-resolved-fg)">
+              <i class="ti ti-circle-check me-2"></i>조치완료 처리
+            </h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          {/* action 은 JS 가 data-id 로 동적 설정 */}
+          <form id="vuln-resolve-form" method="post" action="/solutions/0/vuln-status">
+            <div class="modal-body">
+              <div class="mb-3 p-2 bg-light rounded">
+                <div class="small text-muted mb-1">대상 컴포넌트</div>
+                <div id="vuln-resolve-target" class="fw-bold">—</div>
+              </div>
+              <input type="hidden" name="action" value="resolved" />
+              <div class="row g-3">
+                <div class="col-12">
+                  <label class="form-label required">조치 방식</label>
+                  <select name="method" class="form-select" required>
+                    <option value="manual">수동 조치 (설정 변경·우회 등)</option>
+                    <option value="update">버전 업데이트 (패치 적용)</option>
+                  </select>
+                  <small class="form-hint">조치 이력 화면에서 방식별로 구분되어 표시됩니다.</small>
+                </div>
+                <div class="col-12">
+                  <label class="form-label">메모 <small class="text-muted">(선택)</small></label>
+                  <textarea
+                    name="note"
+                    class="form-control"
+                    rows={3}
+                    placeholder="예: 7.4.1 → 7.4.4 패치 적용 / KISA 권고 설정 변경"
+                  ></textarea>
+                </div>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-link link-secondary" data-bs-dismiss="modal">
+                취소
+              </button>
+              <button type="submit" class="btn" style="background:var(--vm-resolved-fg);color:#fff">
+                <i class="ti ti-circle-check me-1"></i>조치완료 처리
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ============================================================
 // 속성 카드 (카테고리별 category_attributes 파싱 표시)
 // ============================================================
 function AttrCard(props: { category: string; attrs: Record<string, unknown> }) {
@@ -1678,7 +2023,7 @@ function FlashAlert(props: { flash: FlashMessage }) {
         <div><i class={`ti ti-${icon} me-2`}></i></div>
         <div>{props.flash.message}</div>
       </div>
-      <a class="btn-close" data-bs-dismiss="alert" aria-label="close"></a>
+      <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="닫기"></button>
     </div>
   )
 }
@@ -1711,7 +2056,7 @@ function BulkUploadModal() {
                 <code>vendor, model, hostname, os_version</code>
                 <br />
                 <strong>선택 헤더</strong>:{' '}
-                <code>hw_version, db_engine, db_version, openssl_version, web_engine, web_version, was_engine, was_version, group_company, owner, notes</code>
+                <code>hw_version, db_engine, db_version, openssl_version, web_engine, web_version, was_engine, was_version, group_company, owner(부서), manager(담당자), notes</code>
                 <br />
                 <small class="text-muted">엔진 select 값 예시 — DB: MySQL/PostgreSQL/Oracle/MSSQL · WEB: Apache/Nginx/IIS · WAS: Tomcat/JBoss/WebLogic/WebSphere/JEUS</small>
                 <br />
@@ -1751,7 +2096,15 @@ function BulkUploadModal() {
 // ============================================================
 // 장비 등록 모달 (기존 #asset-modal 유지 — 구성요소 추가 prefill 겸용)
 // ============================================================
-function NewAssetModal(props: { groupSuggestions: string[]; userGroups: string[]; isAdmin: boolean }) {
+function NewAssetModal(props: {
+  groupSuggestions: string[]
+  userGroups: string[]
+  isAdmin: boolean
+  activeGroup: string | null
+}) {
+  // v3.6 신규 장비는 현재 진입한 활성 그룹사로 자동 등록 — 수동 그룹사 입력 제거.
+  //   activeGroup 이 없으면(admin '전체') 등록 불가 안내.
+  const canRegister = props.activeGroup !== null
   return (
     <div
       class="modal modal-blur fade"
@@ -1922,46 +2275,30 @@ function NewAssetModal(props: { groupSuggestions: string[]; userGroups: string[]
                 <i class="ti ti-building me-1"></i>자산 메타 (선택)
               </div>
 
+              {/* v3.6 그룹사: 현재 진입한 활성 그룹사로 자동 등록 (수동 입력 제거) */}
               <div class="row g-3">
                 <div class="col-md-6">
-                  <label class="form-label required">그룹사</label>
-                  {props.isAdmin ? (
-                    <input
-                      type="text"
-                      id="asset-group"
-                      class="form-control"
-                      list="asset-group-list"
-                      placeholder="예: 본사, 자회사A (admin 은 자유 입력)"
-                    />
-                  ) : props.userGroups.length === 1 ? (
-                    <input
-                      type="text"
-                      id="asset-group"
-                      class="form-control"
-                      value={props.userGroups[0]}
-                      readonly
-                    />
-                  ) : props.userGroups.length > 1 ? (
-                    <select id="asset-group" class="form-select">
-                      {props.userGroups.map((g) => (<option value={g}>{g}</option>))}
-                    </select>
+                  <label class="form-label">그룹사</label>
+                  {canRegister ? (
+                    <div class="form-control-plaintext py-1">
+                      <span class="badge bg-blue-lt">
+                        <i class="ti ti-building me-1"></i>{props.activeGroup}
+                      </span>
+                      <span class="text-muted ms-2 small">현재 진입한 그룹사로 등록됩니다</span>
+                    </div>
                   ) : (
-                    <input
-                      type="text"
-                      id="asset-group"
-                      class="form-control"
-                      placeholder="담당 그룹사가 없습니다 — 관리자에게 문의"
-                      readonly
-                    />
+                    <div class="text-warning small py-1">
+                      <i class="ti ti-alert-triangle me-1"></i>전체 보기 상태입니다. 특정 그룹사로 진입한 뒤 등록하세요.
+                    </div>
                   )}
-                  <datalist id="asset-group-list">
-                    {props.groupSuggestions.map((name) => (<option value={name}></option>))}
-                  </datalist>
-                  <small class="text-muted">본인이 담당하는 그룹사만 선택 가능합니다.</small>
                 </div>
-                <div class="col-md-6">
-                  <label class="form-label">담당</label>
+                <div class="col-md-3">
+                  <label class="form-label">부서</label>
                   <input type="text" id="asset-owner" class="form-control" placeholder="예: 인프라팀 / 보안팀" />
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label">담당자</label>
+                  <input type="text" id="asset-manager" class="form-control" placeholder="예: 홍길동" />
                 </div>
               </div>
 
@@ -1971,7 +2308,13 @@ function NewAssetModal(props: { groupSuggestions: string[]; userGroups: string[]
               <button type="button" class="btn btn-link link-secondary" data-bs-dismiss="modal">
                 취소
               </button>
-              <button type="submit" id="asset-submit-btn" class="btn btn-success">
+              <button
+                type="submit"
+                id="asset-submit-btn"
+                class="btn btn-success"
+                disabled={!canRegister}
+                title={canRegister ? '' : '특정 그룹사로 진입한 뒤 등록할 수 있습니다'}
+              >
                 <i class="ti ti-check me-1"></i>장비 등록
               </button>
             </div>
@@ -2105,9 +2448,13 @@ function SolutionModal(props: {
                     placeholder="예: fw-hq-01 / srv-app-02"
                   />
                 </div>
-                <div class="col-md-6">
-                  <label class="form-label">담당</label>
+                <div class="col-md-3">
+                  <label class="form-label">부서</label>
                   <input type="text" name="owner" class="form-control" placeholder="예: 보안팀" />
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label">담당자</label>
+                  <input type="text" name="manager" class="form-control" placeholder="예: 홍길동" />
                 </div>
                 <div class="col-12">
                   <label class="form-label">비고</label>

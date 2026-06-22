@@ -101,7 +101,8 @@ export interface EquipmentInput {
   extra_components?: ExtraComponent[] | null
 
   group_company?: string | null
-  owner?: string | null
+  owner?: string | null // 부서(department)
+  manager?: string | null // 담당자(person in charge)
   notes?: string | null
 }
 
@@ -138,10 +139,11 @@ export function mapEquipmentToSolutions(input: EquipmentInput): SolutionInput[] 
 
   const sharedMeta: Pick<
     SolutionInput,
-    'hostname' | 'owner' | 'group_company' | 'notes' | 'cpe_part' | 'cpe_version_range' | 'cpe_uri' | 'aliases' | 'category_attributes'
+    'hostname' | 'owner' | 'manager' | 'group_company' | 'notes' | 'cpe_part' | 'cpe_version_range' | 'cpe_uri' | 'aliases' | 'category_attributes'
   > = {
     hostname,
     owner: trimOrNull(input.owner),
+    manager: trimOrNull(input.manager),
     group_company: trimOrNull(input.group_company),
     notes: trimOrNull(input.notes),
     cpe_part: null,
@@ -315,6 +317,7 @@ export function validateEquipmentInput(
       extra_components: extras,
       group_company: trimOrNull(r.group_company),
       owner: trimOrNull(r.owner),
+      manager: trimOrNull(r.manager),
       notes: trimOrNull(r.notes),
     },
   }
@@ -351,6 +354,7 @@ export function csvRowToEquipmentRaw(row: Record<string, string>): Record<string
     was_version: row.was_version ?? null,
     group_company: row.group_company ?? null,
     owner: row.owner ?? null,
+    manager: row.manager ?? null,
     notes: row.notes ?? null,
   }
 }

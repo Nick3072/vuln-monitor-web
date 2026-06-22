@@ -20,9 +20,9 @@ import {
   validateEquipmentInput,
   mapEquipmentToSolutions,
 } from '../lib/asset-mapping'
-import { canWriteGroup, defaultGroupForUser } from '../middleware/permissions'
+import { canWriteGroup, resolveWriteGroup } from '../middleware/permissions'
 import { getAuthContext } from '../middleware/auth'
-import { resolveOrCreateAsset, deriveAssetName } from '../lib/assets'
+import { resolveOrCreateAsset, deriveAssetName, applyDerivedImpactSystem } from '../lib/assets'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -56,7 +56,10 @@ app.post('/', async (c) => {
   try {
     if (contentType.includes('multipart/form-data')) {
       source = 'csv'
-      const form = await c.req.formData()
+      const form = await c.req.formData().catch(() => null)
+      if (!form) {
+        return c.json({ success: false, error: 'Failed to read multipart body' }, 400)
+      }
       const file = form.get('file')
       if (file === null || typeof file === 'string') {
         return c.json({ success: false, error: 'Missing `file` field (CSV)' }, 400)
@@ -161,9 +164,16 @@ app.post('/', async (c) => {
           hasError = true
           continue
         }
-        if (!validated.value.group_company) {
-          validated.value.group_company = defaultGroupForUser(c)
+        // v3.6 그룹 쓰기 SSOT — operator 는 활성 그룹 강제(폼/payload 값 무시),
+        //   admin 진입그룹/전체거부, system 은 requested 신뢰. 같은 장비의 모든 컴포넌트가
+        //   동일 활성 그룹으로 통일되어 자산-컴포넌트 그룹 불일치/오병합을 차단한다.
+        const wg = await resolveWriteGroup(c, validated.value.group_company)
+        if (!wg.ok) {
+          errors.push({ row, vendor: validated.value.vendor, product: validated.value.product, error: wg.error })
+          hasError = true
+          continue
         }
+        validated.value.group_company = wg.group
         const perm = canWriteGroup(c, validated.value.group_company)
         if (!perm.ok) {
           errors.push({ row, vendor: validated.value.vendor, product: validated.value.product, error: perm.error })
@@ -179,6 +189,7 @@ app.post('/', async (c) => {
       const sharedHostname = firstInput.hostname
       const sharedGroup = firstInput.group_company
       const sharedOwner = firstInput.owner
+      const sharedManager = firstInput.manager
 
       // asset 이름 결정: deriveAssetName 으로 HW>OS>FW 우선순위 적용
       const assetName = deriveAssetName(
@@ -197,6 +208,7 @@ app.post('/', async (c) => {
           hostname: sharedHostname,
           group_company: sharedGroup,
           owner: sharedOwner,
+          manager: sharedManager,
         })
       } catch (err) {
         errors.push({ row, vendor: firstInput.vendor, product: assetName, error: `asset 생성 실패: ${err instanceof Error ? err.message : ''}` })
@@ -217,6 +229,8 @@ app.post('/', async (c) => {
           })
         }
       }
+      // v3.3 장비 전체 컴포넌트 반영해 영향시스템 자동 분류 (manual 보존)
+      if (candidateAssetId != null) await applyDerivedImpactSystem(db, candidateAssetId)
       continue
     }
 
@@ -233,10 +247,19 @@ app.post('/', async (c) => {
         continue
       }
 
-      // v3.0 권한 검증 — group_company 미지정 시 operator 의 첫 그룹사로 자동 보정
-      if (!validated.value.group_company) {
-        validated.value.group_company = defaultGroupForUser(c)
+      // v3.6 그룹 쓰기 SSOT — operator 는 활성 그룹 강제(CSV group_company 컬럼 무시),
+      //   admin 은 진입그룹/전체면 컬럼값 존중, system(n8n) 은 컬럼값 신뢰.
+      const wg = await resolveWriteGroup(c, validated.value.group_company)
+      if (!wg.ok) {
+        errors.push({
+          row,
+          vendor: validated.value.vendor,
+          product: validated.value.product,
+          error: wg.error,
+        })
+        continue
       }
+      validated.value.group_company = wg.group
       const perm = canWriteGroup(c, validated.value.group_company)
       if (!perm.ok) {
         errors.push({
@@ -259,6 +282,7 @@ app.post('/', async (c) => {
           hostname: validated.value.hostname,
           group_company: validated.value.group_company,
           owner: validated.value.owner,
+          manager: validated.value.manager,
         })
       } catch {
         // asset 생성 실패 시 asset_id=null 로 계속 진행
@@ -267,6 +291,8 @@ app.post('/', async (c) => {
       try {
         const id = await insertBulkSolution(c.env, validated.value, 'bulk_csv', legacyAssetId)
         insertedIds.push(id)
+        // v3.3 영향시스템 자동 분류 (manual 보존)
+        if (legacyAssetId != null) await applyDerivedImpactSystem(db, legacyAssetId)
       } catch (err) {
         errors.push({
           row,
@@ -339,6 +365,7 @@ function csvRowToInput(row: Record<string, string>): Record<string, unknown> {
     current_version: row.current_version ?? '',
     hostname: row.hostname ?? null,
     owner: row.owner ?? null,
+    manager: row.manager ?? null,
     notes: row.notes ?? null,
     group_company: row.group_company ?? null,
     cpe_part: row.cpe_part ?? null,
@@ -419,10 +446,10 @@ async function insertBulkSolution(
   const result = await db
     .prepare(
       `INSERT INTO solutions
-         (vendor, product, category, current_version, hostname, owner, notes, group_company,
+         (vendor, product, category, current_version, hostname, owner, manager, notes, group_company,
           cpe_part, cpe_version_range, aliases, vendor_normalized, product_normalized,
           cpe_uri, category_attributes, source, embedding_status, asset_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
     )
     .bind(
       input.vendor,
@@ -431,6 +458,7 @@ async function insertBulkSolution(
       input.current_version,
       input.hostname,
       input.owner,
+      input.manager,
       input.notes,
       input.group_company,
       cpePart,

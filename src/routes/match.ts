@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { ApiResponse, Bindings, SemanticMatchHit, SemanticMatchRequest } from '../types'
 import { querySimilarSolutions } from '../lib/embeddings'
+import { canWriteGroup } from '../middleware/permissions'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -63,6 +64,11 @@ app.post('/embed/:id', async (c) => {
     }>()
   if (!row) {
     return c.json({ success: false, error: 'Solution not found' }, 404)
+  }
+  // v3.6 그룹 권한 가드 — operator 는 본인 그룹 솔루션만 임베딩 재생성 가능.
+  const perm = canWriteGroup(c, row.group_company)
+  if (!perm.ok) {
+    return c.json({ success: false, error: perm.error }, perm.status)
   }
   const { upsertSolutionEmbedding } = await import('../lib/embeddings')
   const result = await upsertSolutionEmbedding(c.env, row)

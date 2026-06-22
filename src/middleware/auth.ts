@@ -2,6 +2,7 @@ import type { Context, Next } from 'hono'
 import { getSignedCookie } from 'hono/cookie'
 import type { Bindings, UserRole } from '../types'
 import { getUserById, getUserGroups, isSystemUsername } from '../lib/users'
+import { timingSafeEqual } from '../lib/password'
 
 // v3.0 다중 사용자 세션 + 외부 자동화 Bearer 토큰 동시 지원.
 //
@@ -117,7 +118,8 @@ async function readBearer(c: Context<{ Bindings: Bindings }>): Promise<AuthConte
   const header = c.req.header('Authorization')
   if (!header || !header.startsWith('Bearer ')) return null
   const token = header.slice(7).trim()
-  if (token.length === 0 || token !== expected) return null
+  // 상수시간 비교 — 장기 시스템 자격증명(API_KEY)의 타이밍 사이드채널 차단.
+  if (token.length === 0 || !timingSafeEqual(token, expected)) return null
 
   // 시스템 사용자는 모든 그룹사 허용 (role='system' 으로 권한 헬퍼가 통과)
   // 실제 사용자가 미존재할 가능성 대비해 fallback 처리
@@ -183,8 +185,3 @@ export async function sessionOrBearerAuth(
   }
   return c.json({ success: false, error: 'Authentication required' }, 401)
 }
-
-/**
- * v2.7 호환 alias — 더 이상 별도 동작 없음.
- */
-export const bearerAuth = sessionOrBearerAuth

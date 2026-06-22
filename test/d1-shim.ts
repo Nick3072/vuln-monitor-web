@@ -34,6 +34,7 @@ export interface D1Statement<T = Record<string, unknown>> {
 
 export interface D1DatabaseShim {
   prepare<T = Record<string, unknown>>(sql: string): D1Statement<T>
+  batch<T = Record<string, unknown>>(statements: D1Statement<T>[]): Promise<D1RunResult[]>
 }
 
 // ─ 구현 ─────────────────────────────────────────────────────
@@ -102,12 +103,20 @@ export function createD1Shim(): D1DatabaseShim {
     prepare<T = Record<string, unknown>>(sql: string): D1Statement<T> {
       return new D1StatementImpl<T>(db, sql)
     },
+    async batch<T = Record<string, unknown>>(statements: D1Statement<T>[]): Promise<D1RunResult[]> {
+      // 실제 D1 batch 는 순차 원자 적용 → 테스트에서도 순차 실행으로 동등 동작.
+      const out: D1RunResult[] = []
+      for (const s of statements) out.push(await s.run())
+      return out
+    },
   } as D1DatabaseShim
 }
 
 /**
- * 마이그레이션 파일 0001~0006 을 순서대로 실행한다.
+ * 마이그레이션 파일 0001~0008 을 순서대로 실행한다.
  * ALTER TABLE 이 실패할 경우(이미 열이 있는 경우) 경고 없이 무시.
+ * 주의: 이 무시 동작 때문에 컬럼 생성 자체를 검증하려면 PRAGMA table_info 단정이 필요하다
+ *       (test/migrations.test.ts 참조).
  */
 export function applyMigrations(db: D1DatabaseShim): void {
   const migrationsDir = join(process.cwd(), 'migrations')
@@ -119,6 +128,11 @@ export function applyMigrations(db: D1DatabaseShim): void {
     '0005_multi_user_auth.sql',
     '0006_assets.sql',
     '0007_manual_vuln_status.sql',
+    '0008_impact_system.sql',
+    '0009_manager.sql',
+    '0010_login_security.sql',
+    '0011_group_companies.sql',
+    '0012_audit_action_index.sql',
   ]
 
   // DatabaseSync 에 직접 접근하기 위해 내부 인스턴스에 접근
@@ -150,6 +164,11 @@ export function createD1ShimWithRaw(): D1DatabaseShim & { _rawDb: DatabaseSync }
     _rawDb: db,
     prepare<T = Record<string, unknown>>(sql: string): D1Statement<T> {
       return new D1StatementImpl<T>(db, sql)
+    },
+    async batch<T = Record<string, unknown>>(statements: D1Statement<T>[]): Promise<D1RunResult[]> {
+      const out: D1RunResult[] = []
+      for (const s of statements) out.push(await s.run())
+      return out
     },
   }
   return shim as D1DatabaseShim & { _rawDb: DatabaseSync }

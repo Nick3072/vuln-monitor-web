@@ -11,11 +11,17 @@ interface AdminUsersPageProps {
     role: 'admin' | 'operator' | 'system'
     groups: string[]
   }
+  activeGroup?: string | null
 }
 
 export function AdminUsersPage(props: AdminUsersPageProps) {
   return (
-    <Layout title="사용자 관리" currentPath="/admin/users" currentUser={props.currentUser}>
+    <Layout
+      title="사용자 관리"
+      currentPath="/admin/users"
+      currentUser={props.currentUser}
+      activeGroup={props.activeGroup}
+    >
       <div class="page-header d-print-none">
         <div class="container-xl">
           <div class="row g-2 align-items-center">
@@ -45,14 +51,14 @@ export function AdminUsersPage(props: AdminUsersPageProps) {
             <div class="alert alert-success alert-dismissible mb-3" role="alert">
               <i class="ti ti-circle-check me-2"></i>
               {props.flash}
-              <a class="btn-close" data-bs-dismiss="alert" aria-label="close"></a>
+              <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="닫기"></button>
             </div>
           ) : null}
           {props.error ? (
             <div class="alert alert-danger alert-dismissible mb-3" role="alert">
               <i class="ti ti-alert-circle me-2"></i>
               {props.error}
-              <a class="btn-close" data-bs-dismiss="alert" aria-label="close"></a>
+              <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="닫기"></button>
             </div>
           ) : null}
 
@@ -140,11 +146,11 @@ function UserRow(props: { user: UserWithGroups }) {
         )}
       </td>
       <td class="text-muted small">{u.last_login_at ?? '—'}</td>
-      <td class="text-end">
+      <td class="text-end vm-act-col">
         {isSystem ? (
           <span class="text-muted small">읽기 전용</span>
         ) : (
-          <div class="btn-list flex-nowrap">
+          <div class="btn-list flex-nowrap justify-content-end">
             <button
               type="button"
               class="btn btn-sm btn-icon"

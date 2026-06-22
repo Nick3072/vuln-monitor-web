@@ -1,6 +1,8 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "vuln-monitor-web",
+	// HAE - HCLOUD 계정. OAuth 토큰이 다중 계정 접근 가능하여 비대화형 배포 시 계정 명시 필요.
+	"account_id": "1fd0dfc495cd579134490965371cdb68",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-04-22",
 	"compatibility_flags": ["nodejs_compat"],
@@ -23,6 +25,11 @@
 	],
 	"vars": {
 		"ENVIRONMENT": "production"
+	},
+	// v3.5 Cron Trigger — login_attempts 보존기간(90일) 초과분 일일 정리(scheduled 핸들러).
+	//   UTC 18:00 = KST 03:00 (운영 저부하 시간)
+	"triggers": {
+		"crons": ["0 18 * * *"]
 	}
 	// Secrets (set via `wrangler secret put <NAME>`):
 	//   API_KEY                   - bearer token for /api/* (n8n / external automation, '_system_automation' 매핑)

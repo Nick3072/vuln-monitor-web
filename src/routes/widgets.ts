@@ -39,7 +39,7 @@ function parseConfigJson(widgetType: WidgetType, configRaw: string | null): stri
   } else if (widgetType === 'filter_preset') {
     // 최소 1개 필드 채워야 의미 있음
     const p = parsed as Record<string, unknown>
-    const hasAny = ['group_company', 'category', 'min_severity'].some(
+    const hasAny = ['group_company', 'category', 'min_severity', 'impact_system'].some(
       (k) => typeof p[k] === 'string' && (p[k] as string).length > 0,
     )
     if (!hasAny) return null
