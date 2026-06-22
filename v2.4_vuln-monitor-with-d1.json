@@ -1,0 +1,1091 @@
+{
+  "name": "v2.4 vuln-monitor with D1",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "3222319d-d154-4fe1-abde-a2db53b42338",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        2048,
+        -464
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// v2.3 Backfill State Machine\n// - Reads workflow static data for `lastBackfillAt`.\n// - mode = 'backfill' on first run, 'daily' thereafter.\n// - Computes NVD pubStart/pubEnd for daily path.\n// ============================================================\n$getWorkflowStaticData('global').lastBackfillAt = null;\nconst staticData = $getWorkflowStaticData('global');\nconst lastBackfillAt = staticData.lastBackfillAt ?? null;\nconst mode = lastBackfillAt ? 'daily' : 'backfill';\n\nconst now = new Date();\nconst yesterday = new Date(now.getTime() - 86400000).toISOString().split('T')[0];\n\nreturn [{ json: {\n  mode,\n  lastBackfillAt,\n  nowIso: now.toISOString(),\n  nvdPubStart: yesterday + 'T00:00:00.000',\n  nvdPubEnd: yesterday + 'T23:59:59.999',\n  backfillDays: 365\n}}];\n"
+      },
+      "id": "dc15893b-6605-4f14-9ae0-34305de239f8",
+      "name": "Code - Backfill State",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2272,
+        -464
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://vuln-monitor-web.hyundai-autoever-corporation-hcloud.workers.dev/api/solutions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "timeout": 15000
+        }
+      },
+      "id": "7a448aa5-8d1b-4289-9f15-96c30505330a",
+      "name": "HTTP - GET D1 Solutions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2496,
+        -464
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Q3DkNF98AWqDuc8s",
+          "name": "Workers API Bearer"
+        }
+      },
+      "notes": "Authorization: Bearer <API_KEY>"
+    },
+    {
+      "parameters": {
+        "url": "https://www.boho.or.kr/kr/rss.do?bbsId=B0000302",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "outputPropertyName": "body"
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "5a2de2f5-86b5-4d71-9d25-f7a1d87eeebb",
+      "name": "HTTP - KrCERT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2720,
+        -848
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "src-krcert-003",
+              "name": "source",
+              "value": "KrCERT",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "40977c95-5590-4e22-982b-ce9c7d22cf57",
+      "name": "Set - KrCERT Source",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [
+        2944,
+        -848
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://services.nvd.nist.gov/rest/json/cves/2.0",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "keywordSearch",
+              "value": "Firewall IPS IDS WAF DDoS VPN EDR SIEM"
+            },
+            {
+              "name": "pubStartDate",
+              "value": "={{ $('Code - Backfill State').first().json.nvdPubStart }}"
+            },
+            {
+              "name": "pubEndDate",
+              "value": "={{ $('Code - Backfill State').first().json.nvdPubEnd }}"
+            },
+            {
+              "name": "resultsPerPage",
+              "value": "50"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "timeout": 20000
+        }
+      },
+      "id": "7ea146b7-0e71-47f0-8af6-6481c8de0fbd",
+      "name": "HTTP - NVD Daily",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2720,
+        -656
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "src-nvd-003",
+              "name": "source",
+              "value": "NVD",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "ed4df510-76de-471a-ac42-1d2da949b983",
+      "name": "Set - NVD Source",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [
+        2944,
+        -656
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://www.cisa.gov/cybersecurity-advisories/all.xml",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "outputPropertyName": "body"
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "80016131-3fa1-43ca-848c-b4a38bc342e9",
+      "name": "HTTP - CISA RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2720,
+        -480
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "src-cisa-003",
+              "name": "source",
+              "value": "CISA",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "e83d5d95-80ba-4606-aba2-f5ab8be4202d",
+      "name": "Set - CISA Source",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [
+        2944,
+        -480
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "src-opencve-003",
+              "name": "source",
+              "value": "OpenCVE",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "3168f704-d651-48c8-8d0a-0d2733ef906d",
+      "name": "Set - OpenCVE Source",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [
+        2944,
+        -304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// v2.3 NVD/OpenCVE Crawler (backfill + daily unified)\n// - Runs ALWAYS. Mode controls date windows:\n//   · backfill → 4 × 120-day windows (NVD API range limit, 1y total)\n//   · daily    → 1 window (yesterday)\n// - NVD keyword is derived from D1 solutions' vendors (per-vendor query).\n//   WHY: NVD keywordSearch uses AND logic across words. A concatenated\n//   keyword like 'Firewall IPS IDS WAF DDoS VPN EDR SIEM' would require\n//   all 8 words in one CVE description → returns ~0 results. Per-vendor\n//   query (e.g. 'F5', 'Fortinet') returns all CVEs mentioning that vendor;\n//   AI Agent downstream filters by product/version.\n// - OpenCVE pagination runs only in backfill mode and only if $env.OPENCVE_BEARER is set.\n//\n// n8n task-runner sandbox notes (v2.16.0+):\n//   - `URL` / `URLSearchParams` globals are NOT exposed → manual query string.\n//   - `process` global is NOT exposed → use $env helper for env vars.\n// ============================================================\n\nconst state = $('Code - Backfill State').first().json;\nconst isBackfill = state.mode === 'backfill';\n\n// Derive per-vendor keywords from D1 solutions list.\nconst solutionsResp = $('HTTP - GET D1 Solutions').first().json;\nconst solutions = (solutionsResp && solutionsResp.data) ? solutionsResp.data : [];\nconst uniqueVendors = Array.from(new Set(solutions.map((s) => (s.vendor || '').trim()).filter(Boolean)));\n\nif (uniqueVendors.length === 0) {\n  console.log('[crawler] No vendors in D1 solutions, skipping NVD crawl');\n  return [];\n}\n\nconst out = [];\nconst nowMs = Date.now();\nconst DAY_MS = 86400000;\nconst WINDOW_DAYS = 120;\nconst TOTAL_DAYS = isBackfill ? (state.backfillDays ?? 365) : 1;\n\nconst buildQuery = (params) => {\n  const pairs = [];\n  for (const [k, v] of Object.entries(params)) {\n    pairs.push(encodeURIComponent(k) + '=' + encodeURIComponent(String(v)));\n  }\n  return pairs.join('&');\n};\n\n// Build date windows (oldest → newest).\nconst nvdWindows = [];\nif (isBackfill) {\n  for (let offsetDays = TOTAL_DAYS; offsetDays > 0; offsetDays -= WINDOW_DAYS) {\n    const end = new Date(nowMs - (offsetDays - WINDOW_DAYS) * DAY_MS);\n    const start = new Date(nowMs - offsetDays * DAY_MS);\n    const realEnd = end.getTime() > nowMs ? new Date(nowMs) : end;\n    nvdWindows.push({\n      pubStartDate: start.toISOString().split('.')[0] + '.000',\n      pubEndDate: realEnd.toISOString().split('.')[0] + '.999'\n    });\n  }\n} else {\n  nvdWindows.push({\n    pubStartDate: state.nvdPubStart,\n    pubEndDate: state.nvdPubEnd\n  });\n}\n\nconsole.log('[crawler] mode=' + state.mode + ' vendors=' + uniqueVendors.length + ' windows=' + nvdWindows.length);\n\n// Per-vendor × per-window NVD search.\nfor (const vendor of uniqueVendors) {\n  for (const w of nvdWindows) {\n    const qs = buildQuery({\n      keywordSearch: vendor,\n      pubStartDate: w.pubStartDate,\n      pubEndDate: w.pubEndDate,\n      resultsPerPage: '2000'\n    });\n    const urlString = 'https://services.nvd.nist.gov/rest/json/cves/2.0?' + qs;\n    try {\n      const res = await fetch(urlString, { method: 'GET' });\n      if (!res.ok) {\n        console.log('[crawler] NVD query failed', vendor, w.pubStartDate, res.status);\n        continue;\n      }\n      const body = await res.json();\n      const hit = (body.vulnerabilities || []).length;\n      console.log('[crawler] NVD ' + vendor + ' ' + w.pubStartDate.slice(0,10) + ' → ' + hit + ' CVEs');\n      out.push({ json: { source: 'NVD', ...body } });\n    } catch (e) {\n      console.log('[crawler] NVD error', vendor, w.pubStartDate, String(e));\n    }\n    // NVD rate limit: 5 req/30s without key. Small sleep to be safe.\n    await new Promise((r) => setTimeout(r, 6500));\n  }\n}\n\n// OpenCVE pagination (backfill only)\n// n8n task-runner sandbox blocks `process` — use $env helper instead.\n// If $env is also restricted, skip OpenCVE gracefully (NVD already covers 1 year).\nlet opencveBearer = null;\ntry {\n  if (typeof $env !== 'undefined' && $env && $env.OPENCVE_BEARER) {\n    opencveBearer = $env.OPENCVE_BEARER;\n  }\n} catch (e) {\n  console.log('[backfill] $env not accessible:', String(e));\n}\nif (opencveBearer) {\n  const MAX_PAGES = 50;\n  for (let page = 1; page <= MAX_PAGES; page++) {\n    try {\n      const res = await fetch('https://app.opencve.io/api/cve?page=' + page, {\n        method: 'GET',\n        headers: { 'Authorization': opencveBearer }\n      });\n      if (!res.ok) {\n        console.log('[backfill] OpenCVE page failed', page, res.status);\n        break;\n      }\n      const body = await res.json();\n      out.push({ json: { source: 'OpenCVE', ...body } });\n      if (!body.results || body.results.length === 0) break;\n      if (!body.next) break;\n      // Stop if this page's oldest item is already older than TOTAL_DAYS.\n      const tail = body.results[body.results.length - 1];\n      const ref = tail.updated_at || tail.created_at;\n      if (ref) {\n        const refMs = Date.parse(ref);\n        if (Number.isFinite(refMs) && (nowMs - refMs) > TOTAL_DAYS * DAY_MS) break;\n      }\n    } catch (e) {\n      console.log('[backfill] OpenCVE error page', page, String(e));\n      break;\n    }\n    await new Promise((r) => setTimeout(r, 500));\n  }\n} else {\n  console.log('[backfill] OPENCVE_BEARER not available via $env — skipping OpenCVE backfill (NVD covers 1y)');\n}\n\nreturn out;\n"
+      },
+      "id": "373b0d5c-05f9-49f7-bc7f-d8435a5ba971",
+      "name": "Code - Backfill Crawler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2720,
+        -112
+      ],
+      "notes": "Runs only when mode=backfill (first execution). Requires OPENCVE_BEARER env var. Outputs raw API payloads with `source` tag, same shape Parse & Structure3 consumes."
+    },
+    {
+      "parameters": {},
+      "id": "f3784b83-cb26-4e4f-aedc-efcdfef15b61",
+      "name": "Merge 1 (KrCERT+NVD)",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        3168,
+        -752
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "3ab0341c-c1a7-470e-9a87-53a0e5355016",
+      "name": "Merge 2 (+CISA)",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        3392,
+        -656
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "ae7801b9-f2b5-4b54-b5c0-e1afeb2d153c",
+      "name": "Merge 3 (+OpenCVE)",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        3616,
+        -560
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "4e1535b1-67c7-45b3-a224-a3cdd0253b9d",
+      "name": "Merge 4 (+Backfill)",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        3840,
+        -464
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// v2.3 Parse & Structure for D1 Matching\n// - Same parser logic as v2.2 for KrCERT / NVD / CISA / OpenCVE.\n// - In backfill mode, the 24h OpenCVE recency filter is bypassed.\n// - Output item shape identical to v2.2 so AI Agent prompt stays stable.\n// ============================================================\n\nconst state = $('Code - Backfill State').first().json;\nconst isBackfill = state.mode === 'backfill';\nconst today = new Date().toISOString().split('T')[0];\nconst DAY_MS = 86400000;\nconst nowMs = Date.now();\nconst vulnerabilities = [];\n\nfor (const item of $input.all()) {\n  const source = item.json.source;\n\n  if (source === 'NVD') {\n    const vulns = item.json.vulnerabilities || [];\n    for (const v of vulns) {\n      const cve = v.cve || {};\n      const desc = (cve.descriptions || []).find((d) => d.lang === 'en')?.value || '';\n      const configs = cve.configurations || [];\n      const cpeList = [];\n      for (const cfg of configs) {\n        for (const node of (cfg.nodes || [])) {\n          for (const cpe of (node.cpeMatch || [])) {\n            if (cpe.criteria) cpeList.push(cpe.criteria);\n          }\n        }\n      }\n      const severity =\n        cve.metrics?.cvssMetricV31?.[0]?.cvssData?.baseSeverity ||\n        cve.metrics?.cvssMetricV3?.[0]?.cvssData?.baseSeverity ||\n        cve.metrics?.cvssMetricV2?.[0]?.baseSeverity ||\n        'N/A';\n      vulnerabilities.push({\n        source: 'NVD',\n        cve_id: cve.id || null,\n        title: (cve.id || '') + ': ' + desc.substring(0, 160),\n        description: desc.substring(0, 800),\n        severity,\n        published: (cve.published || today).split('T')[0],\n        url: cve.id ? ('https://nvd.nist.gov/vuln/detail/' + cve.id) : null,\n        cpe: cpeList.slice(0, 10)\n      });\n    }\n  }\n\n  if (source === 'KrCERT') {\n    const xml = item.json.body || '';\n    const rssItemRegex = /<item>([\\s\\S]*?)<\\/item>/g;\n    let m;\n    while ((m = rssItemRegex.exec(xml)) !== null) {\n      const chunk = m[1];\n      const getTag = (tag) => {\n        const re = new RegExp('<' + tag + '>(?:<!\\\\[CDATA\\\\[)?([\\\\s\\\\S]*?)(?:\\\\]\\\\]>)?<\\\\/' + tag + '>');\n        const hit = chunk.match(re);\n        return hit ? hit[1].trim() : '';\n      };\n      const title = getTag('title');\n      const link = getTag('link');\n      const desc = getTag('description').replace(/<[^>]+>/g, '').trim();\n      const pubDate = getTag('pubDate');\n      if (title) {\n        vulnerabilities.push({\n          source: 'KrCERT',\n          cve_id: (title.match(/CVE-\\d{4}-\\d{4,7}/i) || [null])[0],\n          title,\n          description: desc || title,\n          severity: 'N/A',\n          published: pubDate || today,\n          url: link,\n          cpe: []\n        });\n      }\n    }\n  }\n\n  if (source === 'CISA') {\n    const xml = item.json.body || '';\n    const itemRegex = /<item>([\\s\\S]*?)<\\/item>/g;\n    let m;\n    while ((m = itemRegex.exec(xml)) !== null) {\n      const chunk = m[1];\n      const getTag = (tag) => {\n        const re = new RegExp('<' + tag + '>(?:<!\\\\[CDATA\\\\[)?([\\\\s\\\\S]*?)(?:\\\\]\\\\]>)?<\\\\/' + tag + '>');\n        const hit = chunk.match(re);\n        return hit ? hit[1].trim() : '';\n      };\n      const title = getTag('title');\n      const link = getTag('link');\n      const desc = getTag('description').replace(/<[^>]+>/g, '').substring(0, 600);\n      const pubDate = getTag('pubDate');\n      if (title) {\n        vulnerabilities.push({\n          source: 'CISA',\n          cve_id: (title.match(/CVE-\\d{4}-\\d{4,7}/i) || [null])[0],\n          title,\n          description: desc,\n          severity: 'N/A',\n          published: pubDate || today,\n          url: link,\n          cpe: []\n        });\n      }\n    }\n  }\n\n  if (source === 'OpenCVE') {\n    const results = Array.isArray(item.json.results) ? item.json.results : [];\n    for (const r of results) {\n      const cveId = r.cve_id || null;\n      const desc = (r.description || '').trim();\n      const createdAt = r.created_at || null;\n      const updatedAt = r.updated_at || null;\n      const recencyRef = updatedAt || createdAt;\n      if (!isBackfill && recencyRef) {\n        const refMs = Date.parse(recencyRef);\n        if (Number.isFinite(refMs) && (nowMs - refMs) > DAY_MS) continue;\n      }\n      vulnerabilities.push({\n        source: 'OpenCVE',\n        cve_id: cveId,\n        title: (cveId || '') + ': ' + desc.substring(0, 160),\n        description: desc.substring(0, 800),\n        severity: 'N/A',\n        published: (createdAt || updatedAt || today).split('T')[0],\n        url: cveId ? ('https://app.opencve.io/cve/' + cveId) : null,\n        cpe: []\n      });\n    }\n  }\n}\n\nreturn [{ json: {\n  date: today,\n  mode: state.mode,\n  count: vulnerabilities.length,\n  hasVulnerabilities: vulnerabilities.length > 0,\n  vulnerabilities\n}}];\n"
+      },
+      "id": "6f8718c0-a020-471b-ad0e-925e53adbf73",
+      "name": "Code - Parse & Structure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3616,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// v2.4 Combine D1 Solutions + Parsed Vulnerabilities\n// v2.3 대비: 솔루션에 cpe_part / aliases / vendor_normalized / product_normalized /\n//           cpe_version_range / category 를 동봉하여 다음 노드들이 결정론적으로 매칭/스코어링 가능.\n// ============================================================\nconst parsed = $input.first().json;\nconst mode = parsed.mode;\nconst isBackfill = mode === 'backfill';\n\nconst solutionsResp = $('HTTP - GET D1 Solutions').first().json;\nconst allSolutions = (solutionsResp && solutionsResp.data) ? solutionsResp.data : [];\n\nconst DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;\nconst now = Date.now();\n\nconst parseLastMatched = (val) => {\n  if (!val) return null;\n  const s = String(val);\n  const iso = s.includes('T') ? s : s.replace(' ', 'T');\n  const withTz = /[zZ]|[+-]\\d{2}:?\\d{2}$/.test(iso) ? iso : iso + 'Z';\n  const ms = Date.parse(withTz);\n  return Number.isNaN(ms) ? null : ms;\n};\n\nconst activeSolutions = [];\nconst skippedSolutions = [];\nfor (const s of allSolutions) {\n  if (isBackfill) {\n    activeSolutions.push(s);\n    continue;\n  }\n  const lastMs = parseLastMatched(s.last_matched_at);\n  if (lastMs !== null && (now - lastMs) <= DEDUP_WINDOW_MS) {\n    skippedSolutions.push({ id: s.id, vendor: s.vendor, product: s.product, last_matched_at: s.last_matched_at });\n  } else {\n    activeSolutions.push(s);\n  }\n}\n\nconst parseAliases = (raw) => {\n  if (!raw) return [];\n  if (Array.isArray(raw)) return raw.filter((x) => typeof x === 'string');\n  try {\n    const arr = JSON.parse(raw);\n    return Array.isArray(arr) ? arr.filter((x) => typeof x === 'string') : [];\n  } catch { return []; }\n};\n\nreturn [{ json: {\n  date: parsed.date,\n  mode,\n  backfill_mode: isBackfill,\n  hasVulnerabilities: parsed.hasVulnerabilities && activeSolutions.length > 0,\n  vulnerabilityCount: parsed.count,\n  solutionCount: activeSolutions.length,\n  dedupSkippedCount: skippedSolutions.length,\n  dedupSkipped: skippedSolutions,\n  solutions: activeSolutions.map((s) => ({\n    id: s.id,\n    vendor: s.vendor,\n    product: s.product,\n    category: s.category,\n    current_version: s.current_version,\n    hostname: s.hostname,\n    group_company: s.group_company,\n    // === v2.4 매칭 메타데이터 ===\n    cpe_part: s.cpe_part || null,\n    cpe_version_range: s.cpe_version_range || null,\n    aliases: parseAliases(s.aliases),\n    vendor_normalized: s.vendor_normalized || (s.vendor || '').toLowerCase().replace(/[\\s\\-_]+/g, ''),\n    product_normalized: s.product_normalized || (s.product || '').toLowerCase().replace(/[\\s\\-_]+/g, ''),\n  })),\n  vulnerabilities: parsed.vulnerabilities\n}}];"
+      },
+      "id": "27df49ce-7e60-49fa-8539-49bd6de6cd2f",
+      "name": "Code - Combine D1 + Vulns",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2944,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "vuln-check-003",
+              "leftValue": "={{ $json.hasVulnerabilities }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "562dfc7b-cd1a-416f-9847-8b922130278a",
+      "name": "IF - Has Vulnerabilities",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2144,
+        576
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "44001154-de2b-4bed-943c-2a3d6ba73c66",
+      "name": "No Operation (Skip)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2432,
+        720
+      ],
+      "notes": "취약점 없음 → 알림/DB 쓰기 모두 생략"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=다음은 {{ $json.date }} 기준 사전필터링 통과 후보입니다 (mode={{ $json.mode }}).\n\n후보 ({{ $json.candidate_count }}개, 고신뢰 {{ $json.high_confidence_count }}개):\n{{ JSON.stringify($json.candidates) }}\n\n각 후보가 정말로 매칭되는지 검증하고 JSON으로 결과를 반환하세요.",
+        "options": {
+          "systemMessage": "당신은 보안솔루션 취약점 매칭 검증 어시스턴트입니다.\n\n[입력]\n- candidates: 사전필터링 통과 후보. 각 항목은 solution + vulnerability + pre_score + pre_reasons 포함.\n  - pre_score >= 70: CPE 정확 매칭, 거의 확실히 매칭\n  - pre_score 35~70: 키워드/alias 기반, 검증 필요\n  - solution.aliases: 솔루션의 한↔영 표기 변형 / 사내 자산 라벨 / 패밀리 동의어\n  - solution.cpe_part: 'cpe:2.3:a:vendor:product' 표준 식별자\n\n[당신의 역할]\n1) 각 후보에 대해 매칭 합당성 검증 (false positive 제거).\n2) confidence 산정: pre_score + 본문 정합도 + 버전 영향 범위 추론.\n3) 매칭 사유를 50자 이내로 요약.\n\n[출력 형식 - 반드시 순수 JSON, 코드블록 금지, 텍스트 금지]\n{\n  \"matches\": [\n    {\n      \"solution_id\": number,\n      \"cve_id\": string,\n      \"severity\": \"critical\" | \"high\" | \"medium\" | \"low\" | null,\n      \"title\": string,\n      \"description\": string,\n      \"source\": \"KrCERT\" | \"NVD\" | \"CISA\" | \"OpenCVE\",\n      \"url\": string | null,\n      \"published\": \"YYYY-MM-DD\" | null,\n      \"confidence\": \"high\" | \"medium\" | \"low\",\n      \"reason\": string,\n      \"cvss_score\": number | null\n    }\n  ]\n}\n\n[금지]\n- teams_report 같은 텍스트 메시지 생성 금지 (다른 노드가 결정론적으로 생성함).\n- 표 / 마크다운 / 줄바꿈 많은 설명 금지.\n- pre_score < 35 인 항목 임의 추가 금지."
+        }
+      },
+      "id": "58b040af-e9ca-406b-9d49-d82e64108091",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        2368,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// v2.4 AI 응답 파싱 — matches 배열만 사용. teams_report 는 다음 노드가 생성.\nconst raw = $input.first().json;\nconst aiText = raw.output || raw.text || (raw.message && raw.message.content) || '';\n\nlet parsed = null;\ntry {\n  // 코드블록 fence 제거\n  const cleaned = String(aiText).replace(/^```json\\s*/i, '').replace(/\\s*```$/, '').trim();\n  parsed = JSON.parse(cleaned);\n} catch (e) {\n  return [{ json: { matches: [], has_matches: false, parse_error: String(e.message || e), raw_preview: String(aiText).slice(0, 500) } }];\n}\n\nconst matches = Array.isArray(parsed && parsed.matches) ? parsed.matches : [];\nreturn [{ json: {\n  matches,\n  has_matches: matches.length > 0,\n  parse_error: null\n}}];"
+      },
+      "id": "e6d43701-6401-4215-9e2b-049c5f9b8f67",
+      "name": "Code - Parse AI JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2720,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "has-matches",
+              "leftValue": "={{ $json.has_matches }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1c228e4b-f9db-4696-a2f3-5ac7fec054ce",
+      "name": "IF - Has Matches",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2944,
+        432
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "9f896191-d025-47cf-9ad6-36ff842c3432",
+      "name": "No Op (No Matches)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3168,
+        528
+      ],
+      "notes": "매칭 0건 → 알림 생략"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://vuln-monitor-web.hyundai-autoever-corporation-hcloud.workers.dev/api/vulns/match",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ matches: $json.matches_for_d1, backfill_mode: $('Code - Merge Semantic Hits').first().json.backfill_mode || false }) }}",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "timeout": 30000
+        }
+      },
+      "id": "eee5c820-3ef4-43cb-83bb-ec967af66620",
+      "name": "HTTP - POST D1 Match",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3168,
+        336
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Q3DkNF98AWqDuc8s",
+          "name": "Workers API Bearer"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "has-total",
+              "leftValue": "={{ $json.total_matches }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1b8c97be-5e2a-43ef-bf05-1b68cc9a4101",
+      "name": "IF - Should Notify Teams",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3392,
+        336
+      ],
+      "notes": "Teams 알림 조건: daily 모드 + 최소 1건의 신규 CVE 저장. 백필 단계에서는 알림을 보내지 않음. 다음날 같은 CVE는 first_seen_count=0 이므로 자동 dedup."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://defaultc3009ee985dd4ecfa86f79941767d7.06.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/8984d44bb5c7480d9c668a2a39507638/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=UgkVcXgjr6TkxkDH74X-ddT-KejfftPIBwz8qEIT2-o",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.teams_report }) }}",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "timeout": 10000
+        }
+      },
+      "id": "c42abab3-13ec-4a05-a355-af6013d804e2",
+      "name": "HTTP - Teams Webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3616,
+        256
+      ],
+      "notes": "TEAMS_WEBHOOK_URL 환경변수 필수 (Power Automate HTTP trigger URL)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// v2.3 Persist Backfill State\n// - Runs on every successful execution.\n// - On backfill completion: writes `lastBackfillAt` so subsequent runs use daily mode.\n// ============================================================\nconst staticData = $getWorkflowStaticData('global');\nconst parseAI = $('Code - Parse AI JSON').first().json;\n\nif (parseAI.backfill_mode === true && !staticData.lastBackfillAt) {\n  staticData.lastBackfillAt = new Date().toISOString();\n}\n\nreturn $input.all();\n"
+      },
+      "id": "3292adff-6c32-4dd3-855b-6751fadfa572",
+      "name": "Code - Persist State",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3808,
+        448
+      ],
+      "notes": "Workflow static data 에 lastBackfillAt 기록. 이후 실행은 자동으로 daily 모드."
+    },
+    {
+      "parameters": {
+        "url": "https://app.opencve.io/api/cve",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "page",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "timeout": 20000
+        }
+      },
+      "id": "057ff6a3-bf55-4448-b9fc-6988f470c1af",
+      "name": "HTTP - OpenCVE1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2720,
+        -304
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "hbKe33UTBqbnq52x",
+          "name": "OpenCVE API Bearer"
+        }
+      },
+      "notes": "Authorization: Bearer opc_org.<token_id>.<secret> via httpHeaderAuth credential. Name=Authorization, Value=Bearer opc_org.xxx.yyy"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "claude-sonnet-4-6",
+          "mode": "list",
+          "cachedResultName": "claude-sonnet-4-6"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        2368,
+        512
+      ],
+      "id": "a6def78c-f444-4a37-a88d-6d9e8defe002",
+      "name": "Anthropic Chat Model1",
+      "credentials": {
+        "anthropicApi": {
+          "id": "tr2bYkOvEAZpV4Ln",
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// v2.4 Pre-Match Filter — 결정론적 사전 매칭으로 AI 부담 80% 절감.\nconst combined = $input.first().json;\nconst solutions = combined.solutions || [];\nconst vulnerabilities = combined.vulnerabilities || [];\n\nconst norm = (s) => String(s || '').toLowerCase().replace(/[\\s\\-_]+/g, '');\nconst semverParse = (v) => {\n  const m = String(v || '').match(/(\\d+)\\.(\\d+)\\.?(\\d+)?\\.?(\\d+)?/);\n  return m ? [+m[1], +m[2], +(m[3] || 0), +(m[4] || 0)] : null;\n};\nconst semverCmp = (a, b) => { for (let i = 0; i < 4; i++) if (a[i] !== b[i]) return a[i] - b[i]; return 0; };\n\nfunction scoreMatch(sol, vuln) {\n  const aliases = (sol.aliases || []).map(norm).filter(Boolean);\n  const vendorNorm = sol.vendor_normalized || norm(sol.vendor);\n  const productNorm = sol.product_normalized || norm(sol.product);\n\n  const haystack = norm(\n    (vuln.title || '') + ' ' +\n    (vuln.description || '') + ' ' +\n    (Array.isArray(vuln.cpe) ? vuln.cpe.join(' ') : (vuln.cpe || ''))\n  );\n\n  let score = 0;\n  const reasons = [];\n\n  // (a) CPE 정확 매칭 — 가장 강한 신호\n  if (sol.cpe_part && Array.isArray(vuln.cpe)) {\n    const lo = sol.cpe_part.toLowerCase();\n    if (vuln.cpe.some((c) => String(c).toLowerCase().startsWith(lo))) {\n      score += 70;\n      reasons.push('CPE_EXACT');\n    }\n  }\n\n  // (b) vendor + product 매칭\n  if (vendorNorm && haystack.includes(vendorNorm)) { score += 20; reasons.push('vendor'); }\n  if (productNorm && haystack.includes(productNorm)) { score += 20; reasons.push('product'); }\n\n  // (c) alias 매칭 (한↔영, 패밀리 동의어 포함)\n  for (const a of aliases) {\n    if (a.length >= 3 && haystack.includes(a)) { score += 12; reasons.push('alias:' + a); break; }\n  }\n\n  // (d) 버전 범위 매칭\n  if (sol.cpe_version_range && sol.current_version) {\n    const cur = semverParse(sol.current_version);\n    const range = String(sol.cpe_version_range).match(/>=([\\d.]+)\\s*,\\s*<([\\d.]+)/);\n    if (cur && range) {\n      const lo = semverParse(range[1]);\n      const hi = semverParse(range[2]);\n      if (lo && hi && semverCmp(cur, lo) >= 0 && semverCmp(cur, hi) < 0) {\n        score += 30;\n        reasons.push('version_in_range');\n      }\n    }\n  }\n\n  return { score, reasons };\n}\n\nconst candidates = [];\nfor (const sol of solutions) {\n  for (const vuln of vulnerabilities) {\n    const { score, reasons } = scoreMatch(sol, vuln);\n    if (score >= 35) {\n      candidates.push({\n        solution_id: sol.id,\n        sol_summary: `${sol.vendor} ${sol.product} v${sol.current_version}`,\n        vuln_id: vuln.cve_id,\n        vuln_summary: vuln.title,\n        pre_score: score,\n        pre_reasons: reasons,\n        solution: sol,\n        vulnerability: vuln\n      });\n    }\n  }\n}\n\ncandidates.sort((a, b) => b.pre_score - a.pre_score);\n\n// 신규 솔루션이 alias/CPE 없이 등록되어 사전필터를 통과하지 못한 경우를 위해\n// 의미매칭 노드로 넘길 미커버 쌍도 별도 출력.\nconst coveredSolIds = new Set(candidates.map((c) => c.solution_id));\nconst uncoveredSolutions = solutions.filter((s) => !coveredSolIds.has(s.id));\n\nreturn [{ json: {\n  ...combined,\n  candidates: candidates.slice(0, 60),\n  candidate_count: candidates.length,\n  high_confidence_count: candidates.filter((c) => c.pre_score >= 70).length,\n  uncovered_solutions: uncoveredSolutions,\n  // 의미매칭에 보낼 취약점 페이로드 (상위 50건)\n  semantic_payload: {\n    vulnerabilities: vulnerabilities.slice(0, 50).map((v) => ({\n      cve_id: v.cve_id, title: v.title, description: v.description\n    }))\n  }\n}}];"
+      },
+      "id": "pre-match-filter",
+      "name": "Code - Pre-Match Filter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// EPSS + KEV 조회 → vulnerabilities 에 epss_score / is_kev 부착.\n// KEV: 약 1300건 CSV, EPSS: 일별 전체 dump\n// 양쪽 모두 무인증, 캐시 가능.\nconst input = $input.first().json;\nconst vulns = input.vulnerabilities || [];\nconst cveIds = vulns.map((v) => v.cve_id).filter(Boolean);\n\nif (cveIds.length === 0) return [{ json: input }];\n\n// === EPSS — 청크당 100개 ===\nconst epssMap = {};\nconst CHUNK = 100;\nfor (let i = 0; i < cveIds.length; i += CHUNK) {\n  const slice = cveIds.slice(i, i + CHUNK);\n  const url = 'https://api.first.org/data/v1/epss?cve=' + slice.join(',');\n  try {\n    const r = await this.helpers.httpRequest({ method: 'GET', url, json: true, timeout: 10000 });\n    const data = r && r.data ? r.data : [];\n    for (const row of data) {\n      epssMap[row.cve] = parseFloat(row.epss);\n    }\n  } catch (e) {\n    // ignore — best effort\n  }\n}\n\n// === CISA KEV ===\nconst kevSet = new Set();\ntry {\n  const r = await this.helpers.httpRequest({\n    method: 'GET',\n    url: 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json',\n    json: true,\n    timeout: 15000,\n  });\n  for (const v of (r && r.vulnerabilities) || []) {\n    if (v.cveID) kevSet.add(v.cveID);\n  }\n} catch (e) {\n  // ignore — best effort\n}\n\nconst enriched = vulns.map((v) => ({\n  ...v,\n  epss_score: epssMap[v.cve_id] ?? null,\n  is_kev: kevSet.has(v.cve_id),\n}));\n\nreturn [{ json: { ...input, vulnerabilities: enriched, epss_kev_enriched: true } }];"
+      },
+      "id": "code-epss-kev",
+      "name": "Code - EPSS + KEV Enrich",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.VULN_API_BASE }}/api/match/semantic",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.VULN_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "={{ JSON.stringify({ vulnerabilities: $json.semantic_payload.vulnerabilities, top_k: 3, threshold: 0.7 }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "http-semantic-match",
+      "name": "HTTP - Semantic Match (Vectorize)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        1300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 의미매칭 결과를 candidates 에 보강.\n// pre_score 가 35 미만으로 누락된 솔루션×CVE 쌍을 vector similarity 로 다시 끌어옴.\nconst upstream = $('Code - Pre-Match Filter').first().json;\nconst semantic = $input.first().json;\nconst semHits = (semantic && semantic.data) ? semantic.data : [];\n\nconst existing = new Set(upstream.candidates.map((c) => c.solution_id + ':' + c.vuln_id));\nconst solById = Object.fromEntries((upstream.solutions || []).map((s) => [s.id, s]));\nconst vulnById = Object.fromEntries((upstream.vulnerabilities || []).map((v) => [v.cve_id, v]));\n\nconst semanticCandidates = [];\nfor (const h of semHits) {\n  const key = h.solution_id + ':' + h.cve_id;\n  if (existing.has(key)) continue;\n  const sol = solById[h.solution_id];\n  const vuln = vulnById[h.cve_id];\n  if (!sol || !vuln) continue;\n  semanticCandidates.push({\n    solution_id: sol.id,\n    sol_summary: `${sol.vendor} ${sol.product} v${sol.current_version}`,\n    vuln_id: vuln.cve_id,\n    vuln_summary: vuln.title,\n    pre_score: Math.round(h.score * 50) + 35,  // 0.7~1.0 → 70~85 정도\n    pre_reasons: ['semantic:' + h.score],\n    solution: sol,\n    vulnerability: vuln\n  });\n}\n\nconst merged = [...upstream.candidates, ...semanticCandidates]\n  .sort((a, b) => b.pre_score - a.pre_score)\n  .slice(0, 80);\n\nreturn [{ json: {\n  ...upstream,\n  candidates: merged,\n  candidate_count: merged.length,\n  high_confidence_count: merged.filter((c) => c.pre_score >= 70).length,\n  semantic_added: semanticCandidates.length\n}}];"
+      },
+      "id": "code-merge-semantic",
+      "name": "Code - Merge Semantic Hits",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        1250
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// v2.4 Format Teams Message — AI 와 분리된 결정론적 포매팅.\n// 최대 줄 수 강제 cap + 솔루션별 그룹화 + KEV/EPSS 표시.\nconst result = $input.first().json;\nconst matches = result.matches || [];\n\n// 솔루션 정보 lookup (Pre-Match Filter 결과 재사용)\nconst upstream = $('Code - Merge Semantic Hits').first().json;\nconst solById = Object.fromEntries((upstream.solutions || []).map((s) => [s.id, s]));\nconst vulnById = Object.fromEntries((upstream.vulnerabilities || []).map((v) => [v.cve_id, v]));\n\nconst date = (result.date || new Date().toISOString().split('T')[0]).slice(0, 10);\n\nif (matches.length === 0) {\n  return [{ json: {\n    teams_report: `✅ ${date} 매칭된 신규 취약점 없음 (대상 ${upstream.solutionCount || 0}개 솔루션, CVE ${upstream.vulnerabilityCount || 0}건 분석)`,\n    line_count: 1,\n    total_matches: 0\n  }}];\n}\n\nconst SEV_RANK = { critical: 4, high: 3, medium: 2, low: 1 };\nconst SEV_EMOJI = { critical: '🔴', high: '🟠', medium: '🟡', low: '🟢' };\n\n// 솔루션별 그룹화\nconst bySolution = new Map();\nfor (const m of matches) {\n  if (!bySolution.has(m.solution_id)) bySolution.set(m.solution_id, []);\n  bySolution.get(m.solution_id).push(m);\n}\n\nconst lines = [];\nlet critCount = 0, highCount = 0, kevCount = 0;\n\nfor (const [solId, cves] of bySolution.entries()) {\n  cves.sort((a, b) => (b.published || '').localeCompare(a.published || ''));\n  const top = cves[0];\n  const sol = solById[solId] || {};\n  const vulnExtra = vulnById[top.cve_id] || {};\n  const sev = (top.severity || 'medium').toLowerCase();\n  const emoji = SEV_EMOJI[sev] || '⚪';\n\n  if (sev === 'critical') critCount++;\n  if (sev === 'high') highCount++;\n\n  const isKev = vulnExtra.is_kev === true;\n  const epss = typeof vulnExtra.epss_score === 'number' ? vulnExtra.epss_score : null;\n  if (isKev) kevCount++;\n\n  const tags = [];\n  if (isKev) tags.push('🔥KEV');\n  if (epss != null && epss >= 0.5) tags.push(`EPSS ${epss.toFixed(2)}`);\n\n  const extra = cves.length > 1 ? ` · 외 ${cves.length - 1}건` : '';\n\n  lines.push({\n    sev_rank: SEV_RANK[sev] || 0,\n    kev_boost: isKev ? 100 : 0,\n    line: `${emoji} **${sol.vendor || '?'} ${sol.product || '?'}** v${sol.current_version || '?'} · [${top.cve_id}](${top.url || '#'})${tags.length ? ' · ' + tags.join(' · ') : ''}${extra}`\n  });\n}\n\n// KEV → 심각도 순 정렬\nlines.sort((a, b) => (b.kev_boost - a.kev_boost) || (b.sev_rank - a.sev_rank));\n\nconst MAX_LINES = 10;\nconst truncated = lines.length > MAX_LINES;\nconst shown = lines.slice(0, MAX_LINES);\nconst omitted = lines.length - shown.length;\n\nconst headerBadges = [];\nif (critCount > 0) headerBadges.push(`🔴${critCount}`);\nif (highCount > 0) headerBadges.push(`🟠${highCount}`);\nif (kevCount > 0) headerBadges.push(`🔥${kevCount}`);\n\nconst header = `🛡️ **취약점 매칭** · ${date} · 총 ${matches.length}건 (${headerBadges.join(' ')})`;\nconst body = shown.map((l) => l.line).join('\\n');\nconst footer = truncated ? `\\n_…외 ${omitted}건은 대시보드 확인_` : '';\n\nreturn [{ json: {\n  teams_report: `${header}\\n\\n${body}${footer}`,\n  line_count: shown.length + 2,\n  total_matches: matches.length,\n  critical_count: critCount,\n  high_count: highCount,\n  kev_count: kevCount,\n  date,\n  // matched_vulns POST 용 페이로드 (EPSS/KEV 포함)\n  matches_for_d1: matches.map((m) => {\n    const vx = vulnById[m.cve_id] || {};\n    return {\n      solution_id: m.solution_id,\n      cve_id: m.cve_id,\n      source: m.source || 'AI',\n      severity: m.severity || null,\n      title: m.title || null,\n      description: m.description || null,\n      url: m.url || null,\n      published: m.published || null,\n      first_seen_at: m.published || null,\n      match_reasons: m.reason ? [m.reason] : null,\n      epss_score: typeof vx.epss_score === 'number' ? vx.epss_score : null,\n      is_kev: vx.is_kev === true,\n      cvss_score: typeof m.cvss_score === 'number' ? m.cvss_score : null\n    };\n  })\n}}];"
+      },
+      "id": "code-format-teams",
+      "name": "Code - Format Teams Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        800
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Code - Backfill State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Backfill State": {
+      "main": [
+        [
+          {
+            "node": "HTTP - GET D1 Solutions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - GET D1 Solutions": {
+      "main": [
+        [
+          {
+            "node": "HTTP - KrCERT",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HTTP - NVD Daily",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HTTP - CISA RSS",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Code - Backfill Crawler",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HTTP - OpenCVE1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - KrCERT": {
+      "main": [
+        [
+          {
+            "node": "Set - KrCERT Source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set - KrCERT Source": {
+      "main": [
+        [
+          {
+            "node": "Merge 1 (KrCERT+NVD)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - NVD Daily": {
+      "main": [
+        [
+          {
+            "node": "Set - NVD Source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set - NVD Source": {
+      "main": [
+        [
+          {
+            "node": "Merge 1 (KrCERT+NVD)",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "HTTP - CISA RSS": {
+      "main": [
+        [
+          {
+            "node": "Set - CISA Source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set - CISA Source": {
+      "main": [
+        [
+          {
+            "node": "Merge 2 (+CISA)",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Set - OpenCVE Source": {
+      "main": [
+        [
+          {
+            "node": "Merge 3 (+OpenCVE)",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Code - Backfill Crawler": {
+      "main": [
+        [
+          {
+            "node": "Merge 4 (+Backfill)",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge 1 (KrCERT+NVD)": {
+      "main": [
+        [
+          {
+            "node": "Merge 2 (+CISA)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge 2 (+CISA)": {
+      "main": [
+        [
+          {
+            "node": "Merge 3 (+OpenCVE)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge 3 (+OpenCVE)": {
+      "main": [
+        [
+          {
+            "node": "Merge 4 (+Backfill)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge 4 (+Backfill)": {
+      "main": [
+        [
+          {
+            "node": "Code - Parse & Structure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Parse & Structure": {
+      "main": [
+        [
+          {
+            "node": "Code - Combine D1 + Vulns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Combine D1 + Vulns": {
+      "main": [
+        [
+          {
+            "node": "Code - EPSS + KEV Enrich",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Has Vulnerabilities": {
+      "main": [
+        [
+          {
+            "node": "Code - Pre-Match Filter",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Operation (Skip)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Code - Parse AI JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Parse AI JSON": {
+      "main": [
+        [
+          {
+            "node": "IF - Has Matches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Has Matches": {
+      "main": [
+        [
+          {
+            "node": "Code - Format Teams Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Op (No Matches)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - POST D1 Match": {
+      "main": [
+        [
+          {
+            "node": "IF - Should Notify Teams",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Should Notify Teams": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Teams Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Persist State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Teams Webhook": {
+      "main": [
+        [
+          {
+            "node": "Code - Persist State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - OpenCVE1": {
+      "main": [
+        [
+          {
+            "node": "Set - OpenCVE Source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - EPSS + KEV Enrich": {
+      "main": [
+        [
+          {
+            "node": "IF - Has Vulnerabilities",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Pre-Match Filter": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Semantic Match (Vectorize)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Semantic Match (Vectorize)": {
+      "main": [
+        [
+          {
+            "node": "Code - Merge Semantic Hits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Merge Semantic Hits": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Format Teams Message": {
+      "main": [
+        [
+          {
+            "node": "HTTP - POST D1 Match",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "40b43117-bfb9-4482-8959-49c783a2ed09",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "2db739cd2b126e76aeb5cab490a986c0e62dfc65b59838db16381aced7e2e68b",
+    "description": "v2.4 — CPE/aliases 매칭, EPSS+KEV 우선순위, Vectorize 의미매칭, 결정론적 Teams 메시지"
+  },
+  "id": "crAAADTqDUJWGmNc",
+  "tags": []
+}
